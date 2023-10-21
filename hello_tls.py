@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+from typing import Sequence
 import socket
 import struct
 
@@ -73,8 +74,9 @@ class AlertDescription(Enum):
     no_application_protocol = 120
 
 class ServerError(Exception):
-    def __init__(self, level: AlertLevel, alert: AlertDescription):
-        super().__init__(self, f'Server error: {level}: {alert}')
+    def __init__(self, protocol: Protocol, level: AlertLevel, alert: AlertDescription):
+        super().__init__(self, f'Server error ({protocol}): {level}: {alert}')
+        self.protocol = protocol
         self.level = level
         self.alert = alert
 
@@ -92,9 +94,8 @@ class ServerHello:
             # Alert record
             record_type, legacy_record_version, length = struct.unpack('!BHH', packet[:5])
             assert record_type == 0x15
-            assert legacy_record_version == 0x0303
             alert_level_id, alert_description_id = struct.unpack('!BB', packet[5:7])
-            raise ServerError(AlertLevel(alert_level_id), AlertDescription(alert_description_id))
+            raise ServerError(Protocol(to_uint16(legacy_record_version)), AlertLevel(alert_level_id), AlertDescription(alert_description_id))
         
         assert packet[0] == 0x16
         
@@ -113,9 +114,9 @@ class ServerHello:
         ) = struct.unpack(begin_format, begin_packet)
 
         assert record_type == 0x16
-        assert legacy_record_version == 0x0303
+        assert legacy_record_version in [0x0302, 0x0303]
         assert handshake_type == 0x02
-        assert server_version_int == 0x0303
+        assert server_version_int in [0x0302, 0x0303]
         assert session_id_length in [0, 0x20]
 
         cipher_suite_start = begin_length+session_id_length
@@ -125,8 +126,8 @@ class ServerHello:
 @dataclass
 class ClientHello:
     server_name: str
-    allowed_protocols: list[Protocol]
-    allowed_cipher_suites: list[CipherSuite]
+    allowed_protocols: Sequence[Protocol] = tuple(Protocol)
+    allowed_cipher_suites: Sequence[CipherSuite] = tuple(CipherSuite)
 
     def make_packet(self):
         """
@@ -166,17 +167,21 @@ class ClientHello:
             b"\x02\x03", # ECDSA-SHA1
         ])
 
-        supported_versions = b"".join([
-            b"\x03\x04",  # Supported versions: TLS 1.3.
-            b"\x03\x03" * (Protocol.TLS_1_2 in self.allowed_protocols),  # Supported versions: TLS 1.2.
-        ])
-
-        supported_version_extension = (Protocol.TLS_1_3 in self.allowed_protocols) * b"".join([
-            b"\x00\x2b",  # Extension type: supported version.
-            to_uint16(len(supported_versions)+1), # Length of extension data.
-            to_uint8(len(supported_versions)), # Supported versions length.
-            supported_versions
-        ])
+        if Protocol.TLS_1_3 in self.allowed_protocols:
+            # This extension is only available in TLS 1.3.
+            supported_versions = b"".join([
+                b"\x03\x04",  # Supported versions: TLS 1.3.
+                b"\x03\x03" * (Protocol.TLS_1_2 in self.allowed_protocols),
+                b"\x03\x02" * (Protocol.TLS_1_1 in self.allowed_protocols),
+            ])
+            supported_version_extension = b"".join([
+                b"\x00\x2b",  # Extension type: supported version.
+                to_uint16(len(supported_versions)+1), # Length of extension data.
+                to_uint8(len(supported_versions)), # Supported versions length.
+                supported_versions
+            ])
+        else:
+            supported_version_extension = b""
 
         extensions = b"".join([
             b"\x00\x00",  # Extension type: server_name.
@@ -235,7 +240,7 @@ class ClientHello:
         ])
 
         client_hello = b"".join([
-            b"\x03\x03",  # Legacy client version: TLS 1.2 (because ossification).
+            b"\x03\x03" if Protocol.TLS_1_2 in self.allowed_protocols else b"\x03\x02",  # Legacy client version: max TLS 1.2 (because ossification).
             b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f",  # "Random".
             b"\x20",  # Legacy session ID length.
             b"\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff",  # Legacy session ID.
@@ -263,12 +268,13 @@ class ClientHello:
 
         return record
     
-    def send(self) -> ServerHello:
+    def send(self, server_name: str | None = None) -> ServerHello:
         """
         Sends a Client Hello packet to the server and returns the Server Hello packet.
+        By default, sends the packet to the server specified in the constructor.
         """
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((self.server_name, 443))
+        s.connect((self.server_name if server_name is None else server_name, 443))
         s.send(self.make_packet())
         # TODO: accept more or less bytes.
         return ServerHello.from_packet(s.recv(4096))
@@ -279,15 +285,15 @@ def to_uint16(n: int) -> bytes: return n.to_bytes(2, byteorder="big")
 def from_uint8(b: bytes) -> int: return int.from_bytes(b, byteorder="big")
 from_uint16 = from_uint8
     
-def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3) -> list[CipherSuite]:
+def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3) -> Sequence[CipherSuite]:
     """
     Enumerates the cipher suites accepted by the server.
     Since the server picks one accepted cipher suite from the list provided by the client,
     this function must repeatedly connect to the server until all acceptable cipher suites
     are found and the server refuses the handshake.
     """
-    accepted_cipher_suites: list[CipherSuite] = []
-    remainig_cipher_suites: list[CipherSuite] = list(CipherSuite)
+    accepted_cipher_suites: Sequence[CipherSuite] = []
+    remainig_cipher_suites: Sequence[CipherSuite] = list(CipherSuite)
     while True:
         client_hello = ClientHello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=remainig_cipher_suites)
         try:
@@ -302,4 +308,5 @@ def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3) -> lis
     return accepted_cipher_suites
 
 if __name__ == '__main__':
-    print(enumerate_ciphers_suites('boppreh.com', protocol=Protocol.TLS_1_3))
+    print(ClientHello('google.com', allowed_protocols=[Protocol.TLS_1_1]).send())
+    print(enumerate_ciphers_suites('google.com', protocol=Protocol.TLS_1_1))
