@@ -16,5 +16,7 @@ def enumerate_ciphers_suites(
     ...
 
 enumerate_ciphers_suites('google.com')
-# [<CipherSuite.TLS_AES_128_GCM_SHA256: b'\x13\x01'>, <CipherSuite.TLS_AES_256_GCM_SHA384: b'\x13\x02'>, <CipherSuite.TLS_CHACHA20_POLY1305_SHA256: b'\x13\x03'>]
+# [<CipherSuite.TLS_AES_128_GCM_SHA256: b'\x13\x01'>,
+#  <CipherSuite.TLS_AES_256_GCM_SHA384: b'\x13\x02'>,
+#  <CipherSuite.TLS_CHACHA20_POLY1305_SHA256: b'\x13\x03'>]
 ```
