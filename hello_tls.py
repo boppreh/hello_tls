@@ -244,11 +244,11 @@ def parse_server_hello(packet: bytes) -> CipherSuite:
     assert compression_method == 0x00
     return CipherSuite(to_uint16(cipher_suite_int))
 
-def enumerate_ciphers_suites(server_name: str) -> list[CipherSuite]:
+def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3) -> list[CipherSuite]:
     accepted_cipher_suites: list[CipherSuite] = []
     remainig_cipher_suites: list[CipherSuite] = list(CipherSuite)
     while True:
-        client_hello = generate_client_hello(server_name, allowed_cipher_suites=remainig_cipher_suites)
+        client_hello = generate_client_hello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=remainig_cipher_suites)
         try:
             server_hello = send_hello(server_name, client_hello)
         except ValueError:
@@ -265,4 +265,4 @@ def send_hello(server_name, client_hello):
     return parse_server_hello(response)
 
 if __name__ == '__main__':
-    print(enumerate_ciphers_suites('boppreh.com'))
+    print(enumerate_ciphers_suites('boppreh.com', Protocol.TLS_1_3))
