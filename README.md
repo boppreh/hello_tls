@@ -7,7 +7,12 @@ There's no actual cryptography, just sending a stream of bytes and seeing if the
 Its purpose is to quickly discover what cipher suites are enabled on a server. Since the server doesn't advertise this list, instead picking from what is offered by the client, hello_tls.py sends a sequence of Client Hello with different cipher suite combinations. It usually needs less than 5 requests and 200 ms, but for servers with many cipher suites or high latency, bumping `max_workers` splits discovery over many threads.
 
 ```python
-def enumerate_ciphers_suites(server_name: str, protocol:Protocol = Protocol.TLS_1_3, port:int = 443, max_workers:int = 1) -> Sequence[CipherSuite]:
+def enumerate_ciphers_suites(
+    server_name: str,
+    protocol: Protocol = Protocol.TLS_1_3,
+    port: int = 443,
+    max_workers: int = 1
+    ) -> Sequence[CipherSuite]:
     ...
 
 enumerate_ciphers_suites('google.com')
