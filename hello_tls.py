@@ -6,7 +6,7 @@ import socket
 import struct
 
 class Protocol(Enum):
-    SSL_3_0 = b"\x03\x00"
+    SSLv3 = b"\x03\x00"
     TLS_1_0 = b"\x03\x01"
     TLS_1_1 = b"\x03\x02"
     TLS_1_2 = b"\x03\x03"
@@ -262,7 +262,7 @@ class ClientHello:
             client_hello,
         ])
 
-        record_version = Protocol.SSL_3_0 if client_hello_version == Protocol.SSL_3_0 else Protocol.TLS_1_0
+        record_version = Protocol.SSLv3 if client_hello_version == Protocol.SSLv3 else Protocol.TLS_1_0
         record = b"".join([
             b"\x16", # Record type: handshake.
             record_version.value, # Legacy record version: max TLS 1.0 (because ossification).
@@ -272,13 +272,13 @@ class ClientHello:
 
         return record
     
-    def send(self, server_name: str | None = None) -> ServerHello:
+    def send(self, port:int = 443, server_name: str | None = None) -> ServerHello:
         """
         Sends a Client Hello packet to the server and returns the Server Hello packet.
         By default, sends the packet to the server specified in the constructor.
         """
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((self.server_name if server_name is None else server_name, 443))
+        s.connect((self.server_name if server_name is None else server_name, port))
         s.send(self.make_packet())
         # TODO: accept more or less bytes.
         return ServerHello.from_packet(s.recv(4096))
@@ -289,7 +289,7 @@ def to_uint16(n: int) -> bytes: return n.to_bytes(2, byteorder="big")
 def from_uint8(b: bytes) -> int: return int.from_bytes(b, byteorder="big")
 from_uint16 = from_uint8
     
-def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3, max_workers=1) -> Sequence[CipherSuite]:
+def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3, port:int = 443, max_workers=1) -> Sequence[CipherSuite]:
     """
     Enumerates the cipher suites accepted by the server.
     Since the server picks one accepted cipher suite from the list provided by the client,
@@ -302,8 +302,7 @@ def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3, max_wo
         while True:
             client_hello = ClientHello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=remaining_cipher_suites)
             try:
-                print('Sending', client_hello)
-                server_hello = client_hello.send()
+                server_hello = client_hello.send(port=port)
             except ServerError as e:
                 if e.level == AlertLevel.FATAL and e.alert == AlertDescription.handshake_failure:
                     break
@@ -317,8 +316,11 @@ def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3, max_wo
             # Use % to distribute "desirable" cipher suites evenly.
             cipher_suites_subset = [c for i, c in enumerate(CipherSuite) if i % max_workers == n]
             executor.submit(enumerate_subset, cipher_suites_subset)
+    
+    if not accepted_cipher_suites:
+        raise ValueError('Server did not accept any cipher suite')
 
     return accepted_cipher_suites
 
 if __name__ == '__main__':
-    print(enumerate_ciphers_suites('boppreh.com', Protocol.TLS_1_2, max_workers=2))
+    print(enumerate_ciphers_suites('boppreh.com', Protocol.SSLv3, port=443))
