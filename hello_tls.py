@@ -10,6 +10,7 @@ class Protocol(Enum):
     TLS_1_3 = b"\x03\x04"
 
 class CipherSuite(Enum):
+    # TLS 1.3 cipher suites.
     TLS_AES_128_GCM_SHA256 = b"\x13\x01"
     TLS_AES_256_GCM_SHA384 = b"\x13\x02"
     TLS_CHACHA20_POLY1305_SHA256 = b"\x13\x03"
@@ -17,6 +18,7 @@ class CipherSuite(Enum):
     TLS_AES_128_CCM_8_SHA256 = b"\x13\x05"
     TLS_EMPTY_RENEGOTIATION_INFO_SCSV = b"\x00\xff"
 
+    # TLS 1.2 and lower cipher suites.
     TLS_RSA_WITH_3DES_EDE_CBC_SHA = b"\x00\x0a"
     TLS_RSA_WITH_AES_128_CBC_SHA = b"\x00\x2f"
     TLS_RSA_WITH_AES_256_CBC_SHA = b"\x00\x35"
@@ -35,6 +37,7 @@ class CipherSuite(Enum):
     TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 = b"\xcc\xa9"
 
 class Alert(Enum):
+    """ Different alert messages that can be sent by the server. """
     close_notify = 0
     unexpected_message = 10
     bad_record_mac = 20
@@ -63,17 +66,16 @@ class Alert(Enum):
     certificate_required = 116
     no_application_protocol = 120
 
-def to_uint24(n):
-    return n.to_bytes(3, byteorder="big")
-def to_uint8(n):
-    return n.to_bytes(1, byteorder="big")
-def to_uint16(n):
-    return n.to_bytes(2, byteorder="big")
-def from_uint8(b):
-    return int.from_bytes(b, byteorder="big")
+def to_uint24(n: int) -> bytes: return n.to_bytes(3, byteorder="big")
+def to_uint8(n: int) -> bytes: return n.to_bytes(1, byteorder="big")
+def to_uint16(n: int) -> bytes: return n.to_bytes(2, byteorder="big")
+def from_uint8(b: bytes) -> int: return int.from_bytes(b, byteorder="big")
 from_uint16 = from_uint8
 
 def generate_client_hello(server_name: str, allowed_protocols: list[Protocol]=list(Protocol), allowed_cipher_suites: list[CipherSuite]=list(CipherSuite)) -> bytes:
+    """
+    Generates a Client Hello packet for the given server name and settings.
+    """
     # TLS 1.3 Client Hello
     # https://tools.ietf.org/html/rfc8446#section-4.1.2
     # https://tls13.xargs.org/#client-hello/annotated
@@ -170,7 +172,7 @@ def generate_client_hello(server_name: str, allowed_protocols: list[Protocol]=li
         b"\x00\x12", # Extension type: SCT. Allow server to return signed certificate timestamp.
         b"\x00\x00", # Length of extension data.
 
-        supported_version_extension,
+        supported_version_extension, # Present only in TLS 1.3.
 
         # TODO: PSK key exchange modes extension.
         b"\x00\x2d\x00\x02\x01\x01",
@@ -209,6 +211,9 @@ def generate_client_hello(server_name: str, allowed_protocols: list[Protocol]=li
     return record
 
 def parse_server_hello(packet: bytes) -> CipherSuite:
+    """
+    Parses a Server Hello packet and returns the cipher suite accepted by the server.
+    """
     if packet[0] == 0x15:
         # Alert record
         record_type, legacy_record_version, length = struct.unpack('!BHH', packet[:5])
@@ -245,24 +250,34 @@ def parse_server_hello(packet: bytes) -> CipherSuite:
     return CipherSuite(cipher_suite_id)
 
 def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3) -> list[CipherSuite]:
+    """
+    Enumerates the cipher suites accepted by the server.
+    Since the server picks one accepted cipher suite from the list provided by the client,
+    this function must repeatedly connect to the server until all acceptable cipher suites
+    are found and the server refuses the handshake.
+    """
     accepted_cipher_suites: list[CipherSuite] = []
     remainig_cipher_suites: list[CipherSuite] = list(CipherSuite)
     while True:
         client_hello = generate_client_hello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=remainig_cipher_suites)
+        server_hello = send_hello(server_name, client_hello)
         try:
-            server_hello = send_hello(server_name, client_hello)
+            accepted_cipher_suite = parse_server_hello(server_hello)
         except ValueError:
             break
-        accepted_cipher_suites.append(server_hello)
-        remainig_cipher_suites.remove(server_hello)
+        accepted_cipher_suites.append(accepted_cipher_suite)
+        remainig_cipher_suites.remove(accepted_cipher_suite)
     return accepted_cipher_suites
 
-def send_hello(server_name, client_hello):
+def send_hello(server_name: str, client_hello: bytes) -> bytes:
+    """
+    Sends a Client Hello packet to the server and returns the Server Hello packet.
+    """
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect((server_name, 443))
     s.send(client_hello)
-    response = s.recv(4096)
-    return parse_server_hello(response)
+    # TODO: accept more or less bytes.
+    return s.recv(4096)
 
 if __name__ == '__main__':
-    print(enumerate_ciphers_suites('boppreh.com', Protocol.TLS_1_2))
+    print(enumerate_ciphers_suites('boppreh.com'))
