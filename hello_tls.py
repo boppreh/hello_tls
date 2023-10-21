@@ -285,7 +285,6 @@ class ClientHello:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((self.server_name if server_name is None else server_name, port))
         s.send(self.make_packet())
-        # TODO: accept more or less bytes.
         return ServerHello.from_packet(s.recv(4096))
 
 def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS_1_3, port: int = 443, max_workers: int = 1) -> Sequence[CipherSuite]:
@@ -295,7 +294,11 @@ def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS
     this function must repeatedly connect to the server until all acceptable cipher suites
     are found and the server refuses the handshake.
     """
-    accepted_cipher_suites: Sequence[CipherSuite] = []
+    if ':' in server_name:
+        server_name, port_str = server_name.split(':')
+        port = int(port_str)
+
+    accepted_cipher_suites = []
 
     def enumerate_subset(remaining_cipher_suites: list[CipherSuite]) -> None:
         while True:
@@ -303,7 +306,7 @@ def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS
             try:
                 server_hello = client_hello.send(port=port)
             except ServerError as e:
-                if e.level == AlertLevel.FATAL and e.alert == AlertDescription.handshake_failure:
+                if e.alert == AlertDescription.handshake_failure:
                     break
                 else:
                     raise e
