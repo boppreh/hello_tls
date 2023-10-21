@@ -139,7 +139,7 @@ class ClientHello:
     allowed_protocols: Sequence[Protocol] = tuple(Protocol)
     allowed_cipher_suites: Sequence[CipherSuite] = tuple(CipherSuite)
 
-    def make_packet(self):
+    def make_packet(self) -> bytes:
         """
         Generates a Client Hello packet for the given server name and settings.
         """
@@ -261,7 +261,6 @@ class ClientHello:
             extensions,
         ])
 
-        # Don't use struct.pack because it doesn't support 24bit integers.
         handshake = b"".join([
             b"\x01",  # Handshake type: Client Hello.
             to_uint24(len(client_hello)),
@@ -278,7 +277,7 @@ class ClientHello:
 
         return record
     
-    def send(self, port:int = 443, server_name: str | None = None) -> ServerHello:
+    def send(self, port: int = 443, server_name: str | None = None) -> ServerHello:
         """
         Sends a Client Hello packet to the server and returns the Server Hello packet.
         By default, sends the packet to the server specified in the constructor.
@@ -289,7 +288,7 @@ class ClientHello:
         # TODO: accept more or less bytes.
         return ServerHello.from_packet(s.recv(4096))
 
-def enumerate_ciphers_suites(server_name: str, protocol:Protocol = Protocol.TLS_1_3, port:int = 443, max_workers:int = 1) -> Sequence[CipherSuite]:
+def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS_1_3, port: int = 443, max_workers: int = 1) -> Sequence[CipherSuite]:
     """
     Enumerates the cipher suites accepted by the server.
     Since the server picks one accepted cipher suite from the list provided by the client,
