@@ -1,55 +1,47 @@
 import socket
 import struct
 
-
 def to_uint24(n):
     return n.to_bytes(3, byteorder="big")
-
-
 def to_uint8(n):
     return n.to_bytes(1, byteorder="big")
-
-
 def to_uint16(n):
     return n.to_bytes(2, byteorder="big")
-
-
 def from_uint8(b):
     return int.from_bytes(b, byteorder="big")
-
-
 from_uint16 = from_uint8
 
+CIPHER_SUITES_NAMES_BY_ID = {
+    b"\x13\x01": 'TLS_AES_128_GCM_SHA256',
+    b"\x13\x02": 'TLS_AES_256_GCM_SHA384',
+    b"\x13\x03": 'TLS_CHACHA20_POLY1305_SHA256',
+    b"\x13\x04": 'TLS_AES_128_CCM_SHA256',
+    b"\x13\x05": 'TLS_AES_128_CCM_8_SHA256',
+    b"\x00\xff": 'TLS_EMPTY_RENEGOTIATION_INFO_SCSV',
+
+    b"\x00\x0a": 'TLS_RSA_WITH_3DES_EDE_CBC_SHA ',
+    b"\x00\x2f": 'TLS_RSA_WITH_AES_128_CBC_SHA',
+    b"\x00\x35": 'TLS_RSA_WITH_AES_256_CBC_SHA',
+    b"\x00\x9c": 'TLS_RSA_WITH_AES_128_GCM_SHA256',
+    b"\x00\x9d": 'TLS_RSA_WITH_AES_256_GCM_SHA384',
+    b"\xc0\x09": 'TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA',
+    b"\xc0\x0a": 'TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA',
+    b"\xc0\x12": 'TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA',
+    b"\xc0\x13": 'TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA',
+    b"\xc0\x14": 'TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA',
+    b"\xc0\x2b": 'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256',
+    b"\xc0\x2c": 'TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384',
+    b"\xc0\x2f": 'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
+    b"\xc0\x30": 'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384',
+    b"\xcc\xa8": 'TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256',
+    b"\xcc\xa9": 'TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256',
+}
 
 def generate_client_hello(server_name, allow_tls1_3=True, allow_tls1_2=True):
     # TLS 1.3 Client Hello
     # https://tools.ietf.org/html/rfc8446#section-4.1.2
     # https://tls13.xargs.org/#client-hello/annotated
-    cipher_suites = b"".join([
-        b"\x13\x01",  # TLS_AES_128_GCM_SHA256
-        b"\x13\x02",  # TLS_AES_256_GCM_SHA384
-        b"\x13\x03",  # TLS_CHACHA20_POLY1305_SHA256
-        b"\x13\x04",  # TLS_AES_128_CCM_SHA256
-        b"\x13\x05",  # TLS_AES_128_CCM_8_SHA256
-        b"\x00\xff",  # TLS_EMPTY_RENEGOTIATION_INFO_SCSV
-
-        b'\x00\x0a', # TLS_RSA_WITH_3DES_EDE_CBC_SHA 
-        b'\x00\x2f', # TLS_RSA_WITH_AES_128_CBC_SHA
-        b'\x00\x35', # TLS_RSA_WITH_AES_256_CBC_SHA
-        b'\x00\x9c', # TLS_RSA_WITH_AES_128_GCM_SHA256
-        b'\x00\x9d', # TLS_RSA_WITH_AES_256_GCM_SHA384
-        b'\xc0\x09', # TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
-        b'\xc0\x0a', # TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
-        b'\xc0\x12', # TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA
-        b'\xc0\x13', # TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
-        b'\xc0\x14', # TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
-        b'\xc0\x2b', # TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-        b'\xc0\x2c', # TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
-        b'\xc0\x2f', # TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-        b'\xc0\x30', # TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
-        b'\xcc\xa8', # TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
-        b'\xcc\xa9', # TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
-    ])
+    cipher_suites = b"".join(CIPHER_SUITES_NAMES_BY_ID.keys())
 
     curves = b"".join([
         b"\x00\x1d",  # Curve "x25519".
@@ -64,8 +56,7 @@ def generate_client_hello(server_name, allow_tls1_3=True, allow_tls1_2=True):
         b"\x01\x04",  # Curve "ffdhe8192".
     ])
 
-    signature_algorithms = b"".join(
-    [
+    signature_algorithms = b"".join([
         b"\x04\x03", # ECDSA-SECP256r1-SHA256
         b"\x05\x03", # ECDSA-SECP384r1-SHA384
         b"\x06\x03", # ECDSA-SECP521r1-SHA512
@@ -104,11 +95,11 @@ def generate_client_hello(server_name, allow_tls1_3=True, allow_tls1_2=True):
         to_uint16(len(server_name)),  # Length of host_name.
         server_name.encode("ascii"),
 
-        b'\x00\x05', # Extension type: status_request. Allow server to send OCSP information.
-        b'\x00\x05', # Length of extension data.
-        b'\x01', # Certificate status type: OCSP.
-        b'\x00\x00', # Responder ID list length.
-        b'\x00\x00', # Request extension information length.
+        b"\x00\x05", # Extension type: status_request. Allow server to send OCSP information.
+        b"\x00\x05", # Length of extension data.
+        b"\x01", # Certificate status type: OCSP.
+        b"\x00\x00", # Responder ID list length.
+        b"\x00\x00", # Request extension information length.
 
         b"\x00\x0b",  # Extension type: EC point formats.
         b"\x00\x04",  # Length of extension data.
@@ -136,12 +127,12 @@ def generate_client_hello(server_name, allow_tls1_3=True, allow_tls1_2=True):
         to_uint16(len(signature_algorithms)),  # Length of algorithm list.
         signature_algorithms,
 
-        b'\xff\x01', # Extension type: renegotiation_info (TLS 1.2 or lower).
-        b'\x00\x01', # Length of extension data.
-        b'\x00', # Renegotiation info length.
+        b"\xff\x01", # Extension type: renegotiation_info (TLS 1.2 or lower).
+        b"\x00\x01", # Length of extension data.
+        b"\x00", # Renegotiation info length.
 
-        b'\x00\x12', # Extension type: SCT. Allow server to return signed certificate timestamp.
-        b'\x00\x00', # Length of extension data.
+        b"\x00\x12", # Extension type: SCT. Allow server to return signed certificate timestamp.
+        b"\x00\x00", # Length of extension data.
 
         supported_version_extension,
 
@@ -180,7 +171,6 @@ def generate_client_hello(server_name, allow_tls1_3=True, allow_tls1_2=True):
     ])
 
     return record
-
 
 def parse_server_hello(packet):
     if packet[0] == 0x15:
@@ -245,10 +235,9 @@ def parse_server_hello(packet):
     assert server_version == 0x0303
     assert session_id_length == 0x20
     assert compression_method == 0x00
-    return to_uint16(cipher_suite)
+    return CIPHER_SUITES_NAMES_BY_ID.get(to_uint16(cipher_suite), 'Unknown cipher suite')
 
-
-server_name = "db.de"
+server_name = "boppreh.com"
 packet = generate_client_hello(server_name, allow_tls1_3=True, allow_tls1_2=False)
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.connect((server_name, 443))
