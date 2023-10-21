@@ -282,22 +282,34 @@ class ClientHello:
         Sends a Client Hello packet to the server and returns the Server Hello packet.
         By default, sends the packet to the server specified in the constructor.
         """
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(timeout)
-        s.connect((self.server_name if server_name is None else server_name, port))
-        s.send(self.make_packet())
-        return ServerHello.from_packet(s.recv(4096))
+        host = self.server_name if server_name is None else server_name
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.send(self.make_packet())
+            return ServerHello.from_packet(s.recv(4096))
+        
+@dataclass
+class Certificate:
+    subject: str
+    issuer: str
+    algorithm: str
+    not_before: int
+    not_after: int
 
-def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS_1_3, port: int = 443, max_workers: int = 1, timeout: float | None = 2) -> Sequence[CipherSuite]:
+def _parse_host(host: str, port: int = 443):
+    if ':' in host:
+        server_name, port_str = host.split(':', 1)
+        return server_name, int(port_str)
+    else:
+        return host, port
+
+def enumerate_ciphers_suites(host: str, protocol: Protocol = Protocol.TLS_1_3, port: int = 443, max_workers: int = 1, timeout: float | None = 2) -> Sequence[CipherSuite]:
     """
     Enumerates the cipher suites accepted by the server.
     Since the server picks one accepted cipher suite from the list provided by the client,
     this function must repeatedly connect to the server until all acceptable cipher suites
     are found and the server refuses the handshake.
     """
-    if ':' in server_name:
-        server_name, port_str = server_name.split(':', 1)
-        port = int(port_str)
+    server_name, port = _parse_host(host, port)
 
     accepted_cipher_suites = []
 
@@ -324,8 +336,43 @@ def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS
 
     return accepted_cipher_suites
 
+def get_server_certificate_chain(host:str, port: int = 443, timeout: float | None = 2):
+    server_name, port = _parse_host(host, port)
+
+    # from OpenSSL import SSL # pip install pyopenssl
+    # context = SSL.Context(SSL.TLS_CLIENT_METHOD)
+    # client = socket.socket()
+    # client.connect((server_name, port))
+    # clientSSL = SSL.Connection(context, client)
+    # clientSSL.set_connect_state()
+    # clientSSL.do_handshake()
+    # return clientSSL.get_peer_cert_chain()
+
+    # import ssl
+    # context = ssl._create_unverified_context()
+    # with socket.create_connection((server_name, port), timeout=timeout) as conn:
+    #     sock = context.wrap_socket(conn, server_hostname=host)
+    # return sock.getpeercert(True)
+
+    import subprocess, re
+    import ssl
+    completed_process = subprocess.run(
+        ['openssl', 's_client', '-connect', f'{server_name}:{port}', '-servername', server_name, '-showcerts'],
+        capture_output=True,
+        check=True,
+        text=True,
+        input=''
+    )
+    if match := re.search('Certificate chain\n.+?\n---\n', completed_process.stdout, re.DOTALL):
+        certificate_chain_output = match[0]
+        for subject, issuer, algorithm, not_before_str, not_after_str  in re.findall(r'\n \d s:(.+)\n   i:(.+)\n   a:(.+)\n   v:NotBefore: (.+?); NotAfter: (.+)\n', certificate_chain_output):
+            not_before = ssl.cert_time_to_seconds(not_before_str)
+            not_after = ssl.cert_time_to_seconds(not_after_str)
+            yield Certificate(subject, issuer, algorithm, not_before, not_after)
+
 if __name__ == '__main__':
     import sys
     target = sys.argv[1] if len(sys.argv) > 1 else 'boppreh.com'
     from pprint import pprint
     pprint(enumerate_ciphers_suites(target, Protocol.TLS_1_3, max_workers=2))
+    pprint(list(get_server_certificate_chain(target)))
