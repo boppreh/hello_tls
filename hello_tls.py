@@ -277,17 +277,18 @@ class ClientHello:
 
         return record
     
-    def send(self, port: int = 443, server_name: str | None = None) -> ServerHello:
+    def send(self, port: int = 443, server_name: str | None = None, timeout: float | None = 2) -> ServerHello:
         """
         Sends a Client Hello packet to the server and returns the Server Hello packet.
         By default, sends the packet to the server specified in the constructor.
         """
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
         s.connect((self.server_name if server_name is None else server_name, port))
         s.send(self.make_packet())
         return ServerHello.from_packet(s.recv(4096))
 
-def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS_1_3, port: int = 443, max_workers: int = 1) -> Sequence[CipherSuite]:
+def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS_1_3, port: int = 443, max_workers: int = 1, timeout: float | None = 2) -> Sequence[CipherSuite]:
     """
     Enumerates the cipher suites accepted by the server.
     Since the server picks one accepted cipher suite from the list provided by the client,
@@ -304,7 +305,7 @@ def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS
         while True:
             client_hello = ClientHello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=remaining_cipher_suites)
             try:
-                server_hello = client_hello.send(port=port)
+                server_hello = client_hello.send(port=port, timeout=timeout)
             except ServerError as e:
                 if e.alert == AlertDescription.handshake_failure:
                     break

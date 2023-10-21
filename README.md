@@ -11,7 +11,8 @@ def enumerate_ciphers_suites(
     server_name: str,
     protocol: Protocol = Protocol.TLS_1_3,
     port: int = 443,
-    max_workers: int = 1
+    max_workers: int = 1,
+    timeout: float | None = 2,
     ) -> Sequence[CipherSuite]:
     ...
 
