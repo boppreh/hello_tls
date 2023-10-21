@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import socket
 import struct
 
@@ -37,11 +38,11 @@ CIPHER_SUITES_NAMES_BY_ID = {
     b"\xcc\xa9": 'TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256',
 }
 
-def generate_client_hello(server_name, allow_tls1_3=True, allow_tls1_2=True):
+def generate_client_hello(server_name: str, allow_tls1_3: bool=True, allow_tls1_2: bool=True, allowed_cipher_suites=CIPHER_SUITES_NAMES_BY_ID.keys()) -> bytes:
     # TLS 1.3 Client Hello
     # https://tools.ietf.org/html/rfc8446#section-4.1.2
     # https://tls13.xargs.org/#client-hello/annotated
-    cipher_suites = b"".join(CIPHER_SUITES_NAMES_BY_ID.keys())
+    cipher_suites = b"".join(allowed_cipher_suites)
 
     curves = b"".join([
         b"\x00\x1d",  # Curve "x25519".
@@ -172,7 +173,12 @@ def generate_client_hello(server_name, allow_tls1_3=True, allow_tls1_2=True):
 
     return record
 
-def parse_server_hello(packet):
+@dataclass
+class ServerHello:
+    cipher_suite_id: bytes
+    cipher_suite_name: str
+
+def parse_server_hello(packet: bytes) -> ServerHello:
     if packet[0] == 0x15:
         # Alert record
         record_type, legacy_record_version, length = struct.unpack('!BHH', packet[:5])
@@ -226,7 +232,7 @@ def parse_server_hello(packet):
         server_random,
         session_id_length,
         session_id,
-        cipher_suite,
+        cipher_suite_int,
         compression_method,
     ) = struct.unpack(begin_format, begin_packet)
     assert record_type == 0x16
@@ -235,12 +241,29 @@ def parse_server_hello(packet):
     assert server_version == 0x0303
     assert session_id_length == 0x20
     assert compression_method == 0x00
-    return CIPHER_SUITES_NAMES_BY_ID.get(to_uint16(cipher_suite), 'Unknown cipher suite')
+    cipher_suite_id = to_uint16(cipher_suite_int)
+    cipher_suite_name = CIPHER_SUITES_NAMES_BY_ID.get(cipher_suite_id, 'Unknown cipher suite')
+    return ServerHello(cipher_suite_id, cipher_suite_name)
 
-server_name = "boppreh.com"
-packet = generate_client_hello(server_name, allow_tls1_3=True, allow_tls1_2=False)
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect((server_name, 443))
-s.send(packet)
-response = s.recv(4096)
-print(parse_server_hello(response))
+def enumerate_ciphers_suites(server_name: str) -> list[str]:
+    accepted_cipher_names: list[str] = []
+    remaining_ciphers_ids: list[bytes] = list(CIPHER_SUITES_NAMES_BY_ID.keys())
+    while True:
+        client_hello = generate_client_hello(server_name, allowed_cipher_suites=remaining_ciphers_ids)
+        try:
+            server_hello = send_hello(server_name, client_hello)
+        except ValueError:
+            break
+        accepted_cipher_names.append(server_hello.cipher_suite_name)
+        remaining_ciphers_ids.remove(server_hello.cipher_suite_id)
+    return accepted_cipher_names
+
+def send_hello(server_name, client_hello):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((server_name, 443))
+    s.send(client_hello)
+    response = s.recv(4096)
+    return parse_server_hello(response)
+
+if __name__ == '__main__':
+    print(enumerate_ciphers_suites('google.com'))
