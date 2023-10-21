@@ -6,6 +6,8 @@ from typing import Sequence, Tuple
 import socket
 import struct
 
+DEFAULT_TIMEOUT: float = 2
+
 class Protocol(Enum):
     SSLv3 = b"\x03\x00"
     TLS_1_0 = b"\x03\x01"
@@ -278,39 +280,30 @@ class ClientHello:
 
         return record
     
-    def send(self, port: int = 443, server_name: str | None = None, timeout: float | None = 2) -> ServerHello:
+    def send(self, port: int = 443, server_name: str | None = None, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerHello:
         """
         Sends a Client Hello packet to the server and returns the Server Hello packet.
         By default, sends the packet to the server specified in the constructor.
         """
         host = self.server_name if server_name is None else server_name
-        with socket.create_connection((host, port), timeout=timeout) as s:
+        with socket.create_connection((host, port), timeout=timeout_in_seconds) as s:
             s.send(self.make_packet())
             return ServerHello.from_packet(s.recv(4096))
 
-def _parse_host(host: str, port: int = 443):
-    if ':' in host:
-        server_name, port_str = host.split(':', 1)
-        return server_name, int(port_str)
-    else:
-        return host, port
-
-def enumerate_ciphers_suites(host: str, protocol: Protocol = Protocol.TLS_1_3, port: int = 443, max_workers: int = 1, timeout: float | None = 2) -> Sequence[CipherSuite]:
+def enumerate_cipher_suites(server_name: str, protocol: Protocol = Protocol.TLS_1_3, port: int = 443, max_workers: int = 1, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[CipherSuite]:
     """
     Enumerates the cipher suites accepted by the server.
     Since the server picks one accepted cipher suite from the list provided by the client,
     this function must repeatedly connect to the server until all acceptable cipher suites
     are found and the server refuses the handshake.
     """
-    server_name, port = _parse_host(host, port)
-
     accepted_cipher_suites = []
 
     def enumerate_subset(remaining_cipher_suites: list[CipherSuite]) -> None:
         while True:
             client_hello = ClientHello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=remaining_cipher_suites)
             try:
-                server_hello = client_hello.send(port=port, timeout=timeout)
+                server_hello = client_hello.send(port=port, timeout_in_seconds=timeout_in_seconds)
             except ServerError as e:
                 if e.alert == AlertDescription.handshake_failure:
                     break
@@ -354,7 +347,7 @@ class Certificate:
     def key_usage(self):
         return self.extensions.get('keyUsage', '').split(', ') + self.extensions.get('extendedKeyUsage', '').split(', ')
     
-def get_server_certificate_chain(host:str, port: int = 443, timeout: float | None = 2) -> Sequence[Certificate]:
+def get_server_certificate_chain(server_name:str, port: int = 443, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[Certificate]:
     """
     Use socket and pyOpenSSL to get the server certificate chain.
     """
@@ -369,8 +362,6 @@ def get_server_certificate_chain(host:str, port: int = 443, timeout: float | Non
             raise ValueError('Timestamp cannot be None')
         return datetime.strptime(x509_time.decode('ascii'), '%Y%m%d%H%M%SZ')
     
-    server_name, port = _parse_host(host, port)
-
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         connection = SSL.Connection(SSL.Context(SSL.TLS_CLIENT_METHOD), sock)
         connection.connect((server_name, port))
@@ -401,9 +392,46 @@ def get_server_certificate_chain(host:str, port: int = 443, timeout: float | Non
         ))
     return nice_certs
 
+@dataclass
+class ServerScanResult:
+    cipher_suites: Sequence[CipherSuite]
+    certificate_chain: Sequence[Certificate]
+
+def scan_server(server_name: str, protocol: Protocol = Protocol.TLS_1_3, port: int = 443, max_workers: int = 1, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerScanResult:
+    with ThreadPool(max_workers) as pool:
+        cipher_suites_result = pool.apply_async(enumerate_cipher_suites, kwds={
+            'server_name': server_name,
+            'protocol': protocol,
+            'port': port,
+            'max_workers': max_workers,
+            'timeout_in_seconds': timeout_in_seconds,
+        })
+        certificate_chain_result = pool.apply_async(get_server_certificate_chain, kwds={
+            'server_name': server_name,
+            'port': port,
+            'timeout_in_seconds': timeout_in_seconds,
+        })
+
+        return ServerScanResult(cipher_suites_result.get(), certificate_chain_result.get())
+
 if __name__ == '__main__':
     import sys
     target = sys.argv[1] if len(sys.argv) > 1 else 'boppreh.com'
-    from pprint import pprint
-    pprint(enumerate_ciphers_suites(target, Protocol.TLS_1_3, max_workers=2))
-    pprint(get_server_certificate_chain(target))
+    if ':' in target:
+        server_name, port_str = target.split(':', 1)
+        port = int(port_str)
+    else:
+        server_name = target
+        port = 443
+
+    import json, dataclasses
+    class EnhancedJSONEncoder(json.JSONEncoder):
+        def default(self, o):
+            if dataclasses.is_dataclass(o):
+                return dataclasses.asdict(o)
+            elif isinstance(o, Enum):
+                return o.name
+            elif isinstance(o, datetime):
+                return o.isoformat()
+            return super().default(o)
+    print(json.dumps(scan_server(server_name, port=port, protocol=Protocol.TLS_1_3, max_workers=3), indent=2, cls=EnhancedJSONEncoder))
