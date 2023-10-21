@@ -286,14 +286,6 @@ class ClientHello:
         with socket.create_connection((host, port), timeout=timeout) as s:
             s.send(self.make_packet())
             return ServerHello.from_packet(s.recv(4096))
-        
-@dataclass
-class Certificate:
-    subject: str
-    issuer: str
-    algorithm: str
-    not_before: int
-    not_after: int
 
 def _parse_host(host: str, port: int = 443):
     if ':' in host:
@@ -336,43 +328,8 @@ def enumerate_ciphers_suites(host: str, protocol: Protocol = Protocol.TLS_1_3, p
 
     return accepted_cipher_suites
 
-def get_server_certificate_chain(host:str, port: int = 443, timeout: float | None = 2):
-    server_name, port = _parse_host(host, port)
-
-    # from OpenSSL import SSL # pip install pyopenssl
-    # context = SSL.Context(SSL.TLS_CLIENT_METHOD)
-    # client = socket.socket()
-    # client.connect((server_name, port))
-    # clientSSL = SSL.Connection(context, client)
-    # clientSSL.set_connect_state()
-    # clientSSL.do_handshake()
-    # return clientSSL.get_peer_cert_chain()
-
-    # import ssl
-    # context = ssl._create_unverified_context()
-    # with socket.create_connection((server_name, port), timeout=timeout) as conn:
-    #     sock = context.wrap_socket(conn, server_hostname=host)
-    # return sock.getpeercert(True)
-
-    import subprocess, re
-    import ssl
-    completed_process = subprocess.run(
-        ['openssl', 's_client', '-connect', f'{server_name}:{port}', '-servername', server_name, '-showcerts'],
-        capture_output=True,
-        check=True,
-        text=True,
-        input=''
-    )
-    if match := re.search('Certificate chain\n.+?\n---\n', completed_process.stdout, re.DOTALL):
-        certificate_chain_output = match[0]
-        for subject, issuer, algorithm, not_before_str, not_after_str  in re.findall(r'\n \d s:(.+)\n   i:(.+)\n   a:(.+)\n   v:NotBefore: (.+?); NotAfter: (.+)\n', certificate_chain_output):
-            not_before = ssl.cert_time_to_seconds(not_before_str)
-            not_after = ssl.cert_time_to_seconds(not_after_str)
-            yield Certificate(subject, issuer, algorithm, not_before, not_after)
-
 if __name__ == '__main__':
     import sys
     target = sys.argv[1] if len(sys.argv) > 1 else 'boppreh.com'
     from pprint import pprint
     pprint(enumerate_ciphers_suites(target, Protocol.TLS_1_3, max_workers=2))
-    pprint(list(get_server_certificate_chain(target)))
