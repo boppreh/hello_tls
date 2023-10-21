@@ -3,6 +3,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from enum import Enum
 from typing import Sequence, Tuple
+from math import ceil
 import socket
 import struct
 
@@ -316,9 +317,6 @@ def enumerate_cipher_suites(server_name: str, protocol: Protocol = Protocol.TLS_
     cipher_suite_parts = [[c for i, c in enumerate(CipherSuite) if i % max_workers == n] for n in range(max_workers)]
     with ThreadPool(max_workers) as pool:
         pool.map(enumerate_subset, cipher_suite_parts)
-    
-    if not accepted_cipher_suites:
-        raise ValueError(f'Server did not accept any cipher suite. {protocol} is likely not supported')
 
     return accepted_cipher_suites
 
@@ -394,16 +392,25 @@ def get_server_certificate_chain(server_name:str, port: int = 443, timeout_in_se
 
 @dataclass
 class ServerScanResult:
-    cipher_suites: Sequence[CipherSuite]
     certificate_chain: Sequence[Certificate]
+    cipher_suites_tls_1_2: Sequence[CipherSuite]
+    cipher_suites_tls_1_3: Sequence[CipherSuite]
 
-def scan_server(server_name: str, protocol: Protocol = Protocol.TLS_1_3, port: int = 443, max_workers: int = 1, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerScanResult:
+def scan_server(server_name: str, port: int = 443, max_workers: int = 5, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerScanResult:
     with ThreadPool(max_workers) as pool:
-        cipher_suites_result = pool.apply_async(enumerate_cipher_suites, kwds={
+        # Scan TLS 1.2 and TLS 1.3 separately because the cipher suites are incompatible.
+        cipher_suites_tls_1_2_result = pool.apply_async(enumerate_cipher_suites, kwds={
             'server_name': server_name,
-            'protocol': protocol,
+            'protocol': Protocol.TLS_1_2,
             'port': port,
-            'max_workers': max_workers,
+            'max_workers': ceil((max_workers-1) / 2),
+            'timeout_in_seconds': timeout_in_seconds,
+        })
+        cipher_suites_tls_1_3_result = pool.apply_async(enumerate_cipher_suites, kwds={
+            'server_name': server_name,
+            'protocol': Protocol.TLS_1_3,
+            'port': port,
+            'max_workers': ceil((max_workers-1) / 2),
             'timeout_in_seconds': timeout_in_seconds,
         })
         certificate_chain_result = pool.apply_async(get_server_certificate_chain, kwds={
@@ -412,7 +419,11 @@ def scan_server(server_name: str, protocol: Protocol = Protocol.TLS_1_3, port: i
             'timeout_in_seconds': timeout_in_seconds,
         })
 
-        return ServerScanResult(cipher_suites_result.get(), certificate_chain_result.get())
+        return ServerScanResult(
+            certificate_chain_result.get(),
+            cipher_suites_tls_1_2=cipher_suites_tls_1_2_result.get(),
+            cipher_suites_tls_1_3=cipher_suites_tls_1_3_result.get(),
+        )
 
 if __name__ == '__main__':
     import sys
@@ -434,4 +445,4 @@ if __name__ == '__main__':
             elif isinstance(o, datetime):
                 return o.isoformat()
             return super().default(o)
-    print(json.dumps(scan_server(server_name, port=port, protocol=Protocol.TLS_1_3, max_workers=3), indent=2, cls=EnhancedJSONEncoder))
+    print(json.dumps(scan_server(server_name, port=port, max_workers=5), indent=2, cls=EnhancedJSONEncoder))
