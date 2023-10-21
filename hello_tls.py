@@ -1,7 +1,8 @@
 from multiprocessing.pool import ThreadPool
+from datetime import datetime
 from dataclasses import dataclass
 from enum import Enum
-from typing import Sequence
+from typing import Sequence, Tuple
 import socket
 import struct
 
@@ -328,8 +329,81 @@ def enumerate_ciphers_suites(host: str, protocol: Protocol = Protocol.TLS_1_3, p
 
     return accepted_cipher_suites
 
+@dataclass
+class Certificate:
+    """
+    Represents an X509 certificate in a chain sent by the server.
+    """
+    serial_number: int
+    subject: dict[str, str]
+    issuer: dict[str, str]
+    not_before: datetime
+    not_after: datetime
+    signature_algorithm: str
+    extensions: dict[str, str]
+
+    @property
+    def is_valid(self):
+        return self.not_before < datetime.now() < self.not_after
+
+    @property
+    def days_until_expiration(self):
+        return (self.not_after - datetime.now()).days
+    
+    @property
+    def key_usage(self):
+        return self.extensions.get('keyUsage', '').split(', ') + self.extensions.get('extendedKeyUsage', '').split(', ')
+    
+def get_server_certificate_chain(host:str, port: int = 443, timeout: float | None = 2) -> Sequence[Certificate]:
+    """
+    Use socket and pyOpenSSL to get the server certificate chain.
+    """
+    from OpenSSL import SSL, crypto
+    import socket
+
+    def _x509_name_to_dict(x509_name: crypto.X509Name) -> dict[str, str]:
+        return {name.decode('utf-8'): value.decode('utf-8') for name, value in x509_name.get_components()}
+
+    def _x509_time_to_datetime(x509_time: bytes | None) -> datetime:
+        if x509_time is None:
+            raise ValueError('Timestamp cannot be None')
+        return datetime.strptime(x509_time.decode('ascii'), '%Y%m%d%H%M%SZ')
+    
+    server_name, port = _parse_host(host, port)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        connection = SSL.Connection(SSL.Context(SSL.TLS_CLIENT_METHOD), sock)
+        connection.connect((server_name, port))
+        # Necessary for servers that expect SNI. Otherwise expect "tlsv1 alert internal error".
+        connection.set_tlsext_host_name(server_name.encode('utf-8'))
+        connection.do_handshake()
+
+    raw_certs = connection.get_peer_cert_chain()
+
+    if raw_certs is None:
+        raise ValueError('Server did not give any certificate chain')
+    
+    nice_certs: list[Certificate] = []
+    for raw_cert in raw_certs:
+        extensions: dict[str, str] = {}
+        for i in range(raw_cert.get_extension_count()):
+            extension = raw_cert.get_extension(i)
+            extensions[extension.get_short_name().decode('utf-8')] = str(extension)
+        
+        nice_certs.append(Certificate(
+            serial_number=raw_cert.get_serial_number(),
+            subject=_x509_name_to_dict(raw_cert.get_subject()),
+            issuer=_x509_name_to_dict(raw_cert.get_issuer()),
+            not_before=_x509_time_to_datetime(raw_cert.get_notBefore()),
+            not_after=_x509_time_to_datetime(raw_cert.get_notAfter()),
+            signature_algorithm=raw_cert.get_signature_algorithm().decode('utf-8'),
+            extensions=extensions,
+        ))
+    return nice_certs
+
 if __name__ == '__main__':
     import sys
     target = sys.argv[1] if len(sys.argv) > 1 else 'boppreh.com'
     from pprint import pprint
     pprint(enumerate_ciphers_suites(target, Protocol.TLS_1_3, max_workers=2))
+    pprint(get_server_certificate_chain(target))
