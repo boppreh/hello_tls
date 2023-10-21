@@ -382,14 +382,16 @@ def get_server_certificate_chain(server_name:str, port: int = 443, timeout_in_se
 
 @dataclass
 class ServerScanResult:
-    certificate_chain: list[Certificate]
     protocol_support: dict[str, bool]
     cipher_suites_tls_1_2: list[CipherSuite]
     cipher_suites_tls_1_3: list[CipherSuite]
+    certificate_chain: list[Certificate]
 
-def scan_server(server_name: str, port: int = 443, max_workers: int = 5, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerScanResult:
+def scan_server(server_name: str, port: int = 443, fetch_certificate_chain: bool = True, max_workers: int = 5, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerScanResult:
     """
     Scans a SSL/TLS server for supported protocols, cipher suites, and certificate chain.
+
+    `fetch_certificate_chain` can be used to load the certificate chain, at the cost of using pyOpenSSL.
 
     Runs scans in parallel to speed up the process, with up to `max_workers` threads connecting at the same time.
     """
@@ -408,9 +410,10 @@ def scan_server(server_name: str, port: int = 443, max_workers: int = 5, timeout
             result.protocol_support[protocol.name] = False
 
     with ThreadPool(max_workers) as pool:
-        pool.apply_async(lambda: result.certificate_chain.extend(
-            get_server_certificate_chain(server_name, port, timeout_in_seconds))
-        )
+        if fetch_certificate_chain:
+            pool.apply_async(lambda: result.certificate_chain.extend(
+                get_server_certificate_chain(server_name, port, timeout_in_seconds))
+            )
 
         # How many workers to use for scanning cipher suites, per protocol.
         n_cipher_suite_scanners = max(1, max_workers//3)
