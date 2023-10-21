@@ -90,6 +90,8 @@ class ServerHello:
         """
         Parses a Server Hello packet and returns the cipher suite accepted by the server.
         """
+        if not packet:
+            raise ValueError('Empty response')
         if packet[0] == 0x15:
             # Alert record
             record_type, legacy_record_version, length = struct.unpack('!BHH', packet[:5])
@@ -170,11 +172,7 @@ class ClientHello:
 
         if Protocol.TLS_1_3 in self.allowed_protocols:
             # This extension is only available in TLS 1.3.
-            supported_versions = b"".join([
-                b"\x03\x04",  # Supported versions: TLS 1.3.
-                b"\x03\x03" * (Protocol.TLS_1_2 in self.allowed_protocols),
-                b"\x03\x02" * (Protocol.TLS_1_1 in self.allowed_protocols),
-            ])
+            supported_versions = b"".join(protocol.value for protocol in self.allowed_protocols)
             supported_version_extension = b"".join([
                 b"\x00\x2b",  # Extension type: supported version.
                 to_uint16(len(supported_versions)+1), # Length of extension data.
@@ -263,9 +261,10 @@ class ClientHello:
             client_hello,
         ])
 
+        record_version = Protocol.SSL_3_0 if client_hello_version == Protocol.SSL_3_0 else Protocol.TLS_1_0
         record = b"".join([
-            b"\x16",  # Record type: handshake.
-            b"\x03\x01",  # Legacy record version: TLS 1.0 (because ossification).
+            b"\x16", # Record type: handshake.
+            record_version.value, # Legacy record version: max TLS 1.0 (because ossification).
             to_uint16(len(handshake)),
             handshake,
         ])
@@ -312,4 +311,4 @@ def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3) -> Seq
     return accepted_cipher_suites
 
 if __name__ == '__main__':
-    print(enumerate_ciphers_suites('google.com', Protocol.TLS_1_0))
+    print(ClientHello('boppreh.com', [Protocol.SSL_3_0]).send())
