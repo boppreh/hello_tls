@@ -296,7 +296,7 @@ def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS
     are found and the server refuses the handshake.
     """
     if ':' in server_name:
-        server_name, port_str = server_name.split(':')
+        server_name, port_str = server_name.split(':', 1)
         port = int(port_str)
 
     accepted_cipher_suites = []
@@ -315,12 +315,12 @@ def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS
             remaining_cipher_suites.remove(server_hello.cipher_suite)
 
     # Use % to distribute "desirable" cipher suites evenly.
-    subsets = [[c for i, c in enumerate(CipherSuite) if i % max_workers == n] for n in range(max_workers)]
+    cipher_suite_parts = [[c for i, c in enumerate(CipherSuite) if i % max_workers == n] for n in range(max_workers)]
     with ThreadPool(max_workers) as pool:
-        pool.map(enumerate_subset, subsets)
+        pool.map(enumerate_subset, cipher_suite_parts)
     
     if not accepted_cipher_suites:
-        raise ValueError('Server did not accept any cipher suite')
+        raise ValueError(f'Server did not accept any cipher suite. {protocol} is likely not supported')
 
     return accepted_cipher_suites
 
