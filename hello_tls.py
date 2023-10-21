@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 from typing import Sequence
@@ -288,7 +289,7 @@ def to_uint16(n: int) -> bytes: return n.to_bytes(2, byteorder="big")
 def from_uint8(b: bytes) -> int: return int.from_bytes(b, byteorder="big")
 from_uint16 = from_uint8
     
-def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3) -> Sequence[CipherSuite]:
+def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3, max_workers=1) -> Sequence[CipherSuite]:
     """
     Enumerates the cipher suites accepted by the server.
     Since the server picks one accepted cipher suite from the list provided by the client,
@@ -296,19 +297,28 @@ def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3) -> Seq
     are found and the server refuses the handshake.
     """
     accepted_cipher_suites: Sequence[CipherSuite] = []
-    remainig_cipher_suites: Sequence[CipherSuite] = list(CipherSuite)
-    while True:
-        client_hello = ClientHello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=remainig_cipher_suites)
-        try:
-            server_hello = client_hello.send()
-        except ServerError as e:
-            if e.level == AlertLevel.FATAL and e.alert == AlertDescription.handshake_failure:
-                break
-            else:
-                raise e
-        accepted_cipher_suites.append(server_hello.cipher_suite)
-        remainig_cipher_suites.remove(server_hello.cipher_suite)
+
+    def enumerate_subset(remaining_cipher_suites: list[CipherSuite]) -> None:
+        while True:
+            client_hello = ClientHello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=remaining_cipher_suites)
+            try:
+                print('Sending', client_hello)
+                server_hello = client_hello.send()
+            except ServerError as e:
+                if e.level == AlertLevel.FATAL and e.alert == AlertDescription.handshake_failure:
+                    break
+                else:
+                    raise e
+            accepted_cipher_suites.append(server_hello.cipher_suite)
+            remaining_cipher_suites.remove(server_hello.cipher_suite)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for n in range(max_workers):
+            # Use % to distribute "desirable" cipher suites evenly.
+            cipher_suites_subset = [c for i, c in enumerate(CipherSuite) if i % max_workers == n]
+            executor.submit(enumerate_subset, cipher_suites_subset)
+
     return accepted_cipher_suites
 
 if __name__ == '__main__':
-    print(ClientHello('boppreh.com', [Protocol.SSL_3_0]).send())
+    print(enumerate_ciphers_suites('boppreh.com', Protocol.TLS_1_2, max_workers=2))
