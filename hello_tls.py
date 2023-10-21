@@ -2,8 +2,7 @@ from multiprocessing.pool import ThreadPool
 from datetime import datetime
 from dataclasses import dataclass
 from enum import Enum
-from typing import Sequence, Tuple
-from math import ceil
+from typing import Sequence
 import socket
 import struct
 
@@ -291,33 +290,24 @@ class ClientHello:
             s.send(self.make_packet())
             return ServerHello.from_packet(s.recv(4096))
 
-def enumerate_cipher_suites(server_name: str, protocol: Protocol = Protocol.TLS_1_3, port: int = 443, max_workers: int = 1, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[CipherSuite]:
+def enumerate_server_cipher_suites(server_name: str, cipher_suites_to_test: list[CipherSuite], protocol: Protocol = Protocol.TLS_1_3, port: int = 443, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[CipherSuite]:
     """
-    Enumerates the cipher suites accepted by the server.
-    Since the server picks one accepted cipher suite from the list provided by the client,
-    this function must repeatedly connect to the server until all acceptable cipher suites
-    are found and the server refuses the handshake.
+    Given a list of cipher suites to test, sends a sequence of Client Hello packets to the server,
+    removing the accepted cipher suite from the list each time.
+    Returns a list of all cipher suites the server accepted.
     """
     accepted_cipher_suites = []
-
-    def enumerate_subset(remaining_cipher_suites: list[CipherSuite]) -> None:
-        while True:
-            client_hello = ClientHello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=remaining_cipher_suites)
-            try:
-                server_hello = client_hello.send(port=port, timeout_in_seconds=timeout_in_seconds)
-            except ServerError as e:
-                if e.alert == AlertDescription.handshake_failure:
-                    break
-                else:
-                    raise e
-            accepted_cipher_suites.append(server_hello.cipher_suite)
-            remaining_cipher_suites.remove(server_hello.cipher_suite)
-
-    # Use % to distribute "desirable" cipher suites evenly.
-    cipher_suite_parts = [[c for i, c in enumerate(CipherSuite) if i % max_workers == n] for n in range(max_workers)]
-    with ThreadPool(max_workers) as pool:
-        pool.map(enumerate_subset, cipher_suite_parts)
-
+    while cipher_suites_to_test:
+        client_hello = ClientHello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=cipher_suites_to_test)
+        try:
+            server_hello = client_hello.send(port=port, timeout_in_seconds=timeout_in_seconds)
+        except ServerError as e:
+            if e.alert == AlertDescription.handshake_failure:
+                break
+            else:
+                raise e
+        accepted_cipher_suites.append(server_hello.cipher_suite)
+        cipher_suites_to_test.remove(server_hello.cipher_suite)
     return accepted_cipher_suites
 
 @dataclass
@@ -392,38 +382,68 @@ def get_server_certificate_chain(server_name:str, port: int = 443, timeout_in_se
 
 @dataclass
 class ServerScanResult:
-    certificate_chain: Sequence[Certificate]
-    cipher_suites_tls_1_2: Sequence[CipherSuite]
-    cipher_suites_tls_1_3: Sequence[CipherSuite]
+    certificate_chain: list[Certificate]
+    protocol_support: dict[str, bool]
+    cipher_suites_tls_1_2: list[CipherSuite]
+    cipher_suites_tls_1_3: list[CipherSuite]
 
 def scan_server(server_name: str, port: int = 443, max_workers: int = 5, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerScanResult:
-    with ThreadPool(max_workers) as pool:
-        # Scan TLS 1.2 and TLS 1.3 separately because the cipher suites are incompatible.
-        cipher_suites_tls_1_2_result = pool.apply_async(enumerate_cipher_suites, kwds={
-            'server_name': server_name,
-            'protocol': Protocol.TLS_1_2,
-            'port': port,
-            'max_workers': ceil((max_workers-1) / 2),
-            'timeout_in_seconds': timeout_in_seconds,
-        })
-        cipher_suites_tls_1_3_result = pool.apply_async(enumerate_cipher_suites, kwds={
-            'server_name': server_name,
-            'protocol': Protocol.TLS_1_3,
-            'port': port,
-            'max_workers': ceil((max_workers-1) / 2),
-            'timeout_in_seconds': timeout_in_seconds,
-        })
-        certificate_chain_result = pool.apply_async(get_server_certificate_chain, kwds={
-            'server_name': server_name,
-            'port': port,
-            'timeout_in_seconds': timeout_in_seconds,
-        })
+    """
+    Scans a SSL/TLS server for supported protocols, cipher suites, and certificate chain.
 
-        return ServerScanResult(
-            certificate_chain_result.get(),
-            cipher_suites_tls_1_2=cipher_suites_tls_1_2_result.get(),
-            cipher_suites_tls_1_3=cipher_suites_tls_1_3_result.get(),
+    Runs scans in parallel to speed up the process, with up to `max_workers` threads connecting at the same time.
+    """
+    result = ServerScanResult(
+        certificate_chain=[],
+        protocol_support={p.name: False for p in Protocol},
+        cipher_suites_tls_1_2=[],
+        cipher_suites_tls_1_3=[]
+    )
+
+    def check_protocol_support(protocol: Protocol) -> None:
+        try:
+            ClientHello(server_name, allowed_protocols=[protocol]).send(port=port, timeout_in_seconds=timeout_in_seconds)
+            result.protocol_support[protocol.name] = True
+        except ServerError as e:
+            result.protocol_support[protocol.name] = False
+
+    with ThreadPool(max_workers) as pool:
+        pool.apply_async(lambda: result.certificate_chain.extend(
+            get_server_certificate_chain(server_name, port, timeout_in_seconds))
         )
+
+        # How many workers to use for scanning cipher suites, per protocol.
+        n_cipher_suite_scanners = max(1, max_workers//3)
+        # Split list of cipher suites into `n_cipher_suite_scanners` chunks. Use % to distribute "more desirable" cipher suites evenly.
+        cipher_suite_chunks = [[c for i, c in enumerate(CipherSuite) if i % n_cipher_suite_scanners == n] for n in range(n_cipher_suite_scanners)]
+        for cipher_suites_to_test in cipher_suite_chunks:
+            # Scan TLS 1.2 and TLS 1.3 separately because the cipher suites are different.
+            pool.apply_async(
+                enumerate_server_cipher_suites,
+                (server_name, cipher_suites_to_test, Protocol.TLS_1_2, port, timeout_in_seconds),
+                callback=result.cipher_suites_tls_1_2.extend
+            )
+            pool.apply_async(
+                enumerate_server_cipher_suites,
+                (server_name, cipher_suites_to_test, Protocol.TLS_1_3, port, timeout_in_seconds),
+                callback=result.cipher_suites_tls_1_3.extend
+            )
+
+        for other_protocol in [Protocol.SSLv3, Protocol.TLS_1_0, Protocol.TLS_1_1]:
+            pool.apply_async(
+                check_protocol_support,
+                (other_protocol,)
+            )
+
+        # Join all tasks to ensure they finish before returning.
+        pool.close()
+        pool.join()
+
+    # Add higher protocol version support based on cipher suites found.
+    result.protocol_support[Protocol.TLS_1_2.name] = len(result.cipher_suites_tls_1_2) > 0
+    result.protocol_support[Protocol.TLS_1_3.name] = len(result.cipher_suites_tls_1_3) > 0
+
+    return result
 
 if __name__ == '__main__':
     import sys
@@ -437,6 +457,7 @@ if __name__ == '__main__':
 
     import json, dataclasses
     class EnhancedJSONEncoder(json.JSONEncoder):
+        """ Converts non-primitive objects to JSON """
         def default(self, o):
             if dataclasses.is_dataclass(o):
                 return dataclasses.asdict(o)
@@ -445,4 +466,4 @@ if __name__ == '__main__':
             elif isinstance(o, datetime):
                 return o.isoformat()
             return super().default(o)
-    print(json.dumps(scan_server(server_name, port=port, max_workers=5), indent=2, cls=EnhancedJSONEncoder))
+    print(json.dumps(scan_server(server_name, port=port, max_workers=6), indent=2, cls=EnhancedJSONEncoder))
