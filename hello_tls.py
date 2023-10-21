@@ -74,6 +74,12 @@ class AlertDescription(Enum):
     certificate_required = 116
     no_application_protocol = 120
 
+def to_uint24(n: int) -> bytes: return n.to_bytes(3, byteorder="big")
+def to_uint8(n: int) -> bytes: return n.to_bytes(1, byteorder="big")
+def to_uint16(n: int) -> bytes: return n.to_bytes(2, byteorder="big")
+def from_uint8(b: bytes) -> int: return int.from_bytes(b, byteorder="big")
+from_uint16 = from_uint8
+
 class ServerError(Exception):
     def __init__(self, protocol: Protocol, level: AlertLevel, alert: AlertDescription):
         super().__init__(self, f'Server error ({protocol}): {level}: {alert}')
@@ -283,13 +289,7 @@ class ClientHello:
         # TODO: accept more or less bytes.
         return ServerHello.from_packet(s.recv(4096))
 
-def to_uint24(n: int) -> bytes: return n.to_bytes(3, byteorder="big")
-def to_uint8(n: int) -> bytes: return n.to_bytes(1, byteorder="big")
-def to_uint16(n: int) -> bytes: return n.to_bytes(2, byteorder="big")
-def from_uint8(b: bytes) -> int: return int.from_bytes(b, byteorder="big")
-from_uint16 = from_uint8
-    
-def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3, port:int = 443, max_workers=1) -> Sequence[CipherSuite]:
+def enumerate_ciphers_suites(server_name: str, protocol:Protocol = Protocol.TLS_1_3, port:int = 443, max_workers:int = 1) -> Sequence[CipherSuite]:
     """
     Enumerates the cipher suites accepted by the server.
     Since the server picks one accepted cipher suite from the list provided by the client,
@@ -323,4 +323,4 @@ def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3, port:i
     return accepted_cipher_suites
 
 if __name__ == '__main__':
-    print(enumerate_ciphers_suites('boppreh.com', Protocol.SSLv3, port=443))
+    print(enumerate_ciphers_suites('boppreh.com'))
