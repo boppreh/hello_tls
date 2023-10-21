@@ -34,6 +34,35 @@ class CipherSuite(Enum):
     TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 = b"\xcc\xa8"
     TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 = b"\xcc\xa9"
 
+class Alert(Enum):
+    close_notify = 0
+    unexpected_message = 10
+    bad_record_mac = 20
+    record_overflow = 22
+    handshake_failure = 40
+    bad_certificate = 42
+    unsupported_certificate = 43
+    certificate_revoked = 44
+    certificate_expired = 45
+    certificate_unknown = 46
+    illegal_parameter = 47
+    unknown_ca = 48
+    access_denied = 49
+    decode_error = 50
+    decrypt_error = 51
+    protocol_version = 70
+    insufficient_security = 71
+    internal_error = 80
+    inappropriate_fallback = 86
+    user_canceled = 90
+    missing_extension = 109
+    unsupported_extension = 110
+    unrecognized_name = 112
+    bad_certificate_status_response = 113
+    unknown_psk_identity = 115
+    certificate_required = 116
+    no_application_protocol = 120
+
 def to_uint24(n):
     return n.to_bytes(3, byteorder="big")
 def to_uint8(n):
@@ -185,38 +214,9 @@ def parse_server_hello(packet: bytes) -> CipherSuite:
         record_type, legacy_record_version, length = struct.unpack('!BHH', packet[:5])
         assert record_type == 0x15
         assert legacy_record_version == 0x0303
-        alert_level, alert_description = struct.unpack('!BB', packet[5:7])
+        alert_level, alert_description_id = struct.unpack('!BB', packet[5:7])
         alert_level_str = {1: 'warning', 2: 'fatal'}[alert_level]
-        alert_description_str = {
-            0: 'close_notify',
-            10: 'unexpected_message',
-            20: 'bad_record_mac',
-            22: 'record_overflow',
-            40: 'handshake_failure',
-            42: 'bad_certificate',
-            43: 'unsupported_certificate',
-            44: 'certificate_revoked',
-            45: 'certificate_expired',
-            46: 'certificate_unknown',
-            47: 'illegal_parameter',
-            48: 'unknown_ca',
-            49: 'access_denied',
-            50: 'decode_error',
-            51: 'decrypt_error',
-            70: 'protocol_version',
-            71: 'insufficient_security',
-            80: 'internal_error',
-            86: 'inappropriate_fallback',
-            90: 'user_canceled',
-            109: 'missing_extension',
-            110: 'unsupported_extension',
-            112: 'unrecognized_name',
-            113: 'bad_certificate_status_response',
-            115: 'unknown_psk_identity',
-            116: 'certificate_required',
-            120: 'no_application_protocol',
-        }[alert_description]
-        raise ValueError(f'Server error: {alert_level_str}: {alert_description_str}')
+        raise ValueError(f'Server error: {alert_level_str}: {Alert(alert_description_id)}')
     
     assert packet[0] == 0x16
     
