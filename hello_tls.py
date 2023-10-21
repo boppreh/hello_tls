@@ -1,6 +1,38 @@
-from dataclasses import dataclass
+from enum import Enum
 import socket
 import struct
+
+class Protocol(Enum):
+    SSL_3_0 = b"\x03\x00"
+    TLS_1_0 = b"\x03\x01"
+    TLS_1_1 = b"\x03\x02"
+    TLS_1_2 = b"\x03\x03"
+    TLS_1_3 = b"\x03\x04"
+
+class CipherSuite(Enum):
+    TLS_AES_128_GCM_SHA256 = b"\x13\x01"
+    TLS_AES_256_GCM_SHA384 = b"\x13\x02"
+    TLS_CHACHA20_POLY1305_SHA256 = b"\x13\x03"
+    TLS_AES_128_CCM_SHA256 = b"\x13\x04"
+    TLS_AES_128_CCM_8_SHA256 = b"\x13\x05"
+    TLS_EMPTY_RENEGOTIATION_INFO_SCSV = b"\x00\xff"
+
+    TLS_RSA_WITH_3DES_EDE_CBC_SHA = b"\x00\x0a"
+    TLS_RSA_WITH_AES_128_CBC_SHA = b"\x00\x2f"
+    TLS_RSA_WITH_AES_256_CBC_SHA = b"\x00\x35"
+    TLS_RSA_WITH_AES_128_GCM_SHA256 = b"\x00\x9c"
+    TLS_RSA_WITH_AES_256_GCM_SHA384 = b"\x00\x9d"
+    TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA = b"\xc0\x09"
+    TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA = b"\xc0\x0a"
+    TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA = b"\xc0\x12"
+    TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA = b"\xc0\x13"
+    TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA = b"\xc0\x14"
+    TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 = b"\xc0\x2b"
+    TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 = b"\xc0\x2c"
+    TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 = b"\xc0\x2f"
+    TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 = b"\xc0\x30"
+    TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 = b"\xcc\xa8"
+    TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 = b"\xcc\xa9"
 
 def to_uint24(n):
     return n.to_bytes(3, byteorder="big")
@@ -12,37 +44,11 @@ def from_uint8(b):
     return int.from_bytes(b, byteorder="big")
 from_uint16 = from_uint8
 
-CIPHER_SUITES_NAMES_BY_ID = {
-    b"\x13\x01": 'TLS_AES_128_GCM_SHA256',
-    b"\x13\x02": 'TLS_AES_256_GCM_SHA384',
-    b"\x13\x03": 'TLS_CHACHA20_POLY1305_SHA256',
-    b"\x13\x04": 'TLS_AES_128_CCM_SHA256',
-    b"\x13\x05": 'TLS_AES_128_CCM_8_SHA256',
-    b"\x00\xff": 'TLS_EMPTY_RENEGOTIATION_INFO_SCSV',
-
-    b"\x00\x0a": 'TLS_RSA_WITH_3DES_EDE_CBC_SHA ',
-    b"\x00\x2f": 'TLS_RSA_WITH_AES_128_CBC_SHA',
-    b"\x00\x35": 'TLS_RSA_WITH_AES_256_CBC_SHA',
-    b"\x00\x9c": 'TLS_RSA_WITH_AES_128_GCM_SHA256',
-    b"\x00\x9d": 'TLS_RSA_WITH_AES_256_GCM_SHA384',
-    b"\xc0\x09": 'TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA',
-    b"\xc0\x0a": 'TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA',
-    b"\xc0\x12": 'TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA',
-    b"\xc0\x13": 'TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA',
-    b"\xc0\x14": 'TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA',
-    b"\xc0\x2b": 'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256',
-    b"\xc0\x2c": 'TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384',
-    b"\xc0\x2f": 'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
-    b"\xc0\x30": 'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384',
-    b"\xcc\xa8": 'TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256',
-    b"\xcc\xa9": 'TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256',
-}
-
-def generate_client_hello(server_name: str, allow_tls1_3: bool=True, allow_tls1_2: bool=True, allowed_cipher_suites=CIPHER_SUITES_NAMES_BY_ID.keys()) -> bytes:
+def generate_client_hello(server_name: str, allowed_protocols: list[Protocol]=list(Protocol), allowed_cipher_suites: list[CipherSuite]=list(CipherSuite)) -> bytes:
     # TLS 1.3 Client Hello
     # https://tools.ietf.org/html/rfc8446#section-4.1.2
     # https://tls13.xargs.org/#client-hello/annotated
-    cipher_suites = b"".join(allowed_cipher_suites)
+    cipher_suites = b"".join(cipher_suite.value for cipher_suite in allowed_cipher_suites)
 
     curves = b"".join([
         b"\x00\x1d",  # Curve "x25519".
@@ -78,10 +84,10 @@ def generate_client_hello(server_name: str, allow_tls1_3: bool=True, allow_tls1_
 
     supported_versions = b"".join([
         b"\x03\x04",  # Supported versions: TLS 1.3.
-        b"\x03\x03" * allow_tls1_2,  # Supported versions: TLS 1.2.
+        b"\x03\x03" * (Protocol.TLS_1_2 in allowed_protocols),  # Supported versions: TLS 1.2.
     ])
 
-    supported_version_extension = allow_tls1_3 * b"".join([
+    supported_version_extension = (Protocol.TLS_1_3 in allowed_protocols) * b"".join([
         b"\x00\x2b",  # Extension type: supported version.
         to_uint16(len(supported_versions)+1), # Length of extension data.
         to_uint8(len(supported_versions)), # Supported versions length.
@@ -173,12 +179,7 @@ def generate_client_hello(server_name: str, allow_tls1_3: bool=True, allow_tls1_
 
     return record
 
-@dataclass
-class ServerHello:
-    cipher_suite_id: bytes
-    cipher_suite_name: str
-
-def parse_server_hello(packet: bytes) -> ServerHello:
+def parse_server_hello(packet: bytes) -> CipherSuite:
     if packet[0] == 0x15:
         # Alert record
         record_type, legacy_record_version, length = struct.unpack('!BHH', packet[:5])
@@ -241,22 +242,20 @@ def parse_server_hello(packet: bytes) -> ServerHello:
     assert server_version == 0x0303
     assert session_id_length == 0x20
     assert compression_method == 0x00
-    cipher_suite_id = to_uint16(cipher_suite_int)
-    cipher_suite_name = CIPHER_SUITES_NAMES_BY_ID.get(cipher_suite_id, 'Unknown cipher suite')
-    return ServerHello(cipher_suite_id, cipher_suite_name)
+    return CipherSuite(to_uint16(cipher_suite_int))
 
-def enumerate_ciphers_suites(server_name: str) -> list[str]:
-    accepted_cipher_names: list[str] = []
-    remaining_ciphers_ids: list[bytes] = list(CIPHER_SUITES_NAMES_BY_ID.keys())
+def enumerate_ciphers_suites(server_name: str) -> list[CipherSuite]:
+    accepted_cipher_suites: list[CipherSuite] = []
+    remainig_cipher_suites: list[CipherSuite] = list(CipherSuite)
     while True:
-        client_hello = generate_client_hello(server_name, allowed_cipher_suites=remaining_ciphers_ids)
+        client_hello = generate_client_hello(server_name, allowed_cipher_suites=remainig_cipher_suites)
         try:
             server_hello = send_hello(server_name, client_hello)
         except ValueError:
             break
-        accepted_cipher_names.append(server_hello.cipher_suite_name)
-        remaining_ciphers_ids.remove(server_hello.cipher_suite_id)
-    return accepted_cipher_names
+        accepted_cipher_suites.append(server_hello)
+        remainig_cipher_suites.remove(server_hello)
+    return accepted_cipher_suites
 
 def send_hello(server_name, client_hello):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -266,4 +265,4 @@ def send_hello(server_name, client_hello):
     return parse_server_hello(response)
 
 if __name__ == '__main__':
-    print(enumerate_ciphers_suites('google.com'))
+    print(enumerate_ciphers_suites('boppreh.com'))
