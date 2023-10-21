@@ -1,4 +1,4 @@
-from concurrent.futures import ThreadPoolExecutor
+from multiprocessing.pool import ThreadPool
 from dataclasses import dataclass
 from enum import Enum
 from typing import Sequence
@@ -314,11 +314,10 @@ def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS
             accepted_cipher_suites.append(server_hello.cipher_suite)
             remaining_cipher_suites.remove(server_hello.cipher_suite)
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for n in range(max_workers):
-            # Use % to distribute "desirable" cipher suites evenly.
-            cipher_suites_subset = [c for i, c in enumerate(CipherSuite) if i % max_workers == n]
-            executor.submit(enumerate_subset, cipher_suites_subset)
+    # Use % to distribute "desirable" cipher suites evenly.
+    subsets = [[c for i, c in enumerate(CipherSuite) if i % max_workers == n] for n in range(max_workers)]
+    with ThreadPool(max_workers) as pool:
+        pool.map(enumerate_subset, subsets)
     
     if not accepted_cipher_suites:
         raise ValueError('Server did not accept any cipher suite')
@@ -326,4 +325,4 @@ def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS
     return accepted_cipher_suites
 
 if __name__ == '__main__':
-    print(enumerate_ciphers_suites('boppreh.com'))
+    print(enumerate_ciphers_suites('boppreh.com', Protocol.TLS_1_3, max_workers=4))
