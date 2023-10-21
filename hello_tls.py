@@ -220,7 +220,7 @@ def parse_server_hello(packet: bytes) -> CipherSuite:
     
     assert packet[0] == 0x16
     
-    begin_format = "!BHHB3sH32sB32sHB"
+    begin_format = "!BHHB3sH32sB"
     begin_length = struct.calcsize(begin_format)
     begin_packet = packet[:begin_length]
     (
@@ -232,17 +232,17 @@ def parse_server_hello(packet: bytes) -> CipherSuite:
         server_version,
         server_random,
         session_id_length,
-        session_id,
-        cipher_suite_int,
-        compression_method,
     ) = struct.unpack(begin_format, begin_packet)
+
     assert record_type == 0x16
     assert legacy_record_version == 0x0303
     assert handshake_type == 0x02
     assert server_version == 0x0303
-    assert session_id_length == 0x20
-    assert compression_method == 0x00
-    return CipherSuite(to_uint16(cipher_suite_int))
+    assert session_id_length in [0, 0x20]
+
+    cipher_suite_start = begin_length+session_id_length
+    cipher_suite_id = packet[cipher_suite_start:cipher_suite_start+2]
+    return CipherSuite(cipher_suite_id)
 
 def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3) -> list[CipherSuite]:
     accepted_cipher_suites: list[CipherSuite] = []
@@ -265,4 +265,4 @@ def send_hello(server_name, client_hello):
     return parse_server_hello(response)
 
 if __name__ == '__main__':
-    print(enumerate_ciphers_suites('boppreh.com', Protocol.TLS_1_3))
+    print(enumerate_ciphers_suites('boppreh.com', Protocol.TLS_1_2))
