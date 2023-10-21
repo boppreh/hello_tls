@@ -325,4 +325,7 @@ def enumerate_ciphers_suites(server_name: str, protocol: Protocol = Protocol.TLS
     return accepted_cipher_suites
 
 if __name__ == '__main__':
-    print(enumerate_ciphers_suites('boppreh.com', Protocol.TLS_1_3, max_workers=4))
+    import sys
+    target = sys.argv[1] if len(sys.argv) > 1 else 'boppreh.com'
+    from pprint import pprint
+    pprint(enumerate_ciphers_suites(target, Protocol.TLS_1_3, max_workers=2))
