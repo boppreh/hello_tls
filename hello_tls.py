@@ -114,13 +114,14 @@ class ServerHello:
         ) = struct.unpack(begin_format, begin_packet)
 
         assert record_type == 0x16
-        assert legacy_record_version in [0x0302, 0x0303]
+        assert legacy_record_version in [0x0301, 0x0302, 0x0303]
         assert handshake_type == 0x02
-        assert server_version_int in [0x0302, 0x0303]
+        assert server_version_int in [0x0301, 0x0302, 0x0303]
         assert session_id_length in [0, 0x20]
 
         cipher_suite_start = begin_length+session_id_length
         cipher_suite_id = packet[cipher_suite_start:cipher_suite_start+2]
+        # TODO: protocol is wrong for TLS 1.3 because it appears as an extension.
         return ServerHello(Protocol(to_uint16(server_version_int)), CipherSuite(cipher_suite_id))
     
 @dataclass
@@ -239,8 +240,11 @@ class ClientHello:
             b"\x00\x33\x00\x26\x00\x24\x00\x1d\x00\x20\x35\x80\x72\xd6\x36\x58\x80\xd1\xae\xea\x32\x9a\xdf\x91\x21\x38\x38\x51\xed\x21\xa2\x8e\x3b\x75\xe9\x65\xd0\xd2\xcd\x16\x62\x54",
         ])
 
+        client_hello_version = max(self.allowed_protocols, key=lambda protocol: protocol.value)
+        if client_hello_version == Protocol.TLS_1_3:
+            client_hello_version = Protocol.TLS_1_2
         client_hello = b"".join([
-            b"\x03\x03" if Protocol.TLS_1_2 in self.allowed_protocols else b"\x03\x02",  # Legacy client version: max TLS 1.2 (because ossification).
+            client_hello_version.value,  # Legacy client version: max TLS 1.2 (because ossification).
             b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f",  # "Random".
             b"\x20",  # Legacy session ID length.
             b"\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff",  # Legacy session ID.
@@ -308,5 +312,4 @@ def enumerate_ciphers_suites(server_name: str, protocol=Protocol.TLS_1_3) -> Seq
     return accepted_cipher_suites
 
 if __name__ == '__main__':
-    print(ClientHello('google.com', allowed_protocols=[Protocol.TLS_1_1]).send())
-    print(enumerate_ciphers_suites('google.com', protocol=Protocol.TLS_1_1))
+    print(enumerate_ciphers_suites('google.com', Protocol.TLS_1_0))
