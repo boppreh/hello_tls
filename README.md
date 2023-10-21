@@ -1,10 +1,10 @@
 # Hello TLS!
 
-This is a pure Python, single-file, dependency-less implementation of SSL/TLS Client Hello and basic protocol support scanning.
+This is a pure Python, single-file, dependency-less implementation of SSL/TLS Client Hello and basic scaning.
 
-There's no actual cryptography, just sending a stream of bytes and seeing if the server reply vaguely looks ok or not. Supports TLS 1.3, TLS 1.2, TLS 1.1, TLS 1.0, and *maybe* SSLv3 (untested). Optionally, certificate chain can be fetched and parsed, at the cost of relying on pyOpenSSL.
+Its purpose is to quickly discover what cipher suites and SSL/TLS protocols are enabled on a server. Since the server doesn't advertise this list, instead picking from what is offered by the client, hello_tls.py sends a sequence of Client Hello with different cipher suite and protocol combinations. It usually needs less than 8 requests and 300 ms, but for servers with many cipher suites or high latency, bumping `max_workers` splits discovery over many threads.
 
-Its purpose is to quickly discover what cipher suites and SSL/TLS protocols are enabled on a server. Since the server doesn't advertise this list, instead picking from what is offered by the client, hello_tls.py sends a sequence of Client Hello with different cipher suite and protocol combinations. It usually needs less than 5 requests and 200 ms, but for servers with many cipher suites or high latency, bumping `max_workers` splits discovery over many threads.
+There's no actual cryptography, just sending a stream of bytes and seeing if the server reply vaguely looks ok or not. Supports TLS 1.3, TLS 1.2, TLS 1.1, TLS 1.0, and *maybe* SSLv3 (untested). Optionally, the certificate chain can be fetched and parsed, at the cost of relying on pyOpenSSL.
 
 ```python
 def scan_server(
