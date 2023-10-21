@@ -290,12 +290,13 @@ class ClientHello:
             s.send(self.make_packet())
             return ServerHello.from_packet(s.recv(4096))
 
-def enumerate_server_cipher_suites(server_name: str, cipher_suites_to_test: list[CipherSuite], protocol: Protocol = Protocol.TLS_1_3, port: int = 443, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[CipherSuite]:
+def enumerate_server_cipher_suites(server_name: str, cipher_suites_to_test: Sequence[CipherSuite], protocol: Protocol = Protocol.TLS_1_3, port: int = 443, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[CipherSuite]:
     """
     Given a list of cipher suites to test, sends a sequence of Client Hello packets to the server,
     removing the accepted cipher suite from the list each time.
     Returns a list of all cipher suites the server accepted.
     """
+    cipher_suites_to_test = list(cipher_suites_to_test)
     accepted_cipher_suites = []
     while cipher_suites_to_test:
         client_hello = ClientHello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=cipher_suites_to_test)
