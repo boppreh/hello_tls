@@ -6,11 +6,12 @@
 # separate terms of service, privacy policy, and support
 # documentation.
 
-name: Upload Python Package
+name: Publish new PyPI version
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:        
+      - '*'
 
 permissions:
   contents: read
