@@ -37,4 +37,4 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     - name: Check type annotations
       run: |
-        mypy --install-types *.py
+        mypy --install-types --non-interactive *.py
