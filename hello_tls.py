@@ -20,6 +20,9 @@ class Protocol(Enum):
     TLS_1_0 = b"\x03\x01"
     SSLv3 = b"\x03\x00"
 
+    def __repr__(self):
+        return self.name
+
 class RecordType(Enum):
     INVALID = 0 # Unused in this script.
     CHANGE_CIPHER_SPEC = 20 # Unused in this script.
@@ -498,12 +501,13 @@ def get_server_certificate_chain(server_name: str, port: int = 443, timeout_in_s
 class ServerScanResult:
     host: str
     port: int
-    cipher_suites_per_protocol: dict[str, Sequence[CipherSuite]]
-    certificate_chain: list[Certificate]
+    cipher_suites_per_protocol: dict[str, Sequence[CipherSuite]] | None = None
+    certificate_chain: list[Certificate] | None = None
 
 def scan_server(
     target: str,
     port: int = 443,
+    protocols: Sequence[Protocol] = tuple(Protocol),
     enumerate_cipher_suites: bool = True,
     fetch_cert_chain: bool = True,
     max_workers: int = DEFAULT_MAX_WORKERS,
@@ -518,13 +522,11 @@ def scan_server(
     """
     host, port = parse_target(target, default_port=443)
 
-    hello_prefs = TlsHelloSettings(host, port, timeout_in_seconds)
+    hello_prefs = TlsHelloSettings(host, port, timeout_in_seconds, protocols=protocols)
 
     result = ServerScanResult(
         host=host,
         port=port,
-        certificate_chain=[],
-        cipher_suites_per_protocol={p.name: [] for p in Protocol}
     )
 
     tasks = []
@@ -532,16 +534,20 @@ def scan_server(
         add_task = lambda f: tasks.append(pool.apply_async(f))
 
         if fetch_cert_chain:
-            add_task(lambda: result.certificate_chain.extend(
+            add_task(lambda: result.__setattr__(
+                'certificate_chain',
                 get_server_certificate_chain(host, port, timeout_in_seconds)
             ))
 
         if enumerate_cipher_suites:
-            for protocol in Protocol:
-                hello_prefs = dataclasses.replace(hello_prefs, protocols=[protocol])
-                add_task(lambda: result.cipher_suites_per_protocol.update({
-                    protocol.name: enumerate_server_cipher_suites(hello_prefs)
-                }))
+            # Add an intermediary name to appease the type checker.
+            protocol_results: dict[str, Sequence[CipherSuite]] = {p.name: [] for p in protocols}
+            result.cipher_suites_per_protocol = protocol_results
+            for protocol in protocols:
+                add_task(lambda p=protocol: protocol_results.__setitem__(
+                    p.name,
+                    enumerate_server_cipher_suites(dataclasses.replace(hello_prefs, protocols=[p]))
+                ))
 
         # Join all tasks, waiting for them to finish in any order.
         # pool.close() + pool.join() perform a similar job, but discard task errors.
@@ -566,6 +572,7 @@ if __name__ == '__main__':
     parser.add_argument("--max-workers", "-w", type=int, default=DEFAULT_MAX_WORKERS, help=f"maximum number of threads/concurrent connections to use for scanning")
     parser.add_argument("--certs", "-c", dest='fetch_cert_chain', default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
     parser.add_argument("--enumerate-cipher-suites", "-e", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites for each protocol")
+    parser.add_argument("--protocol", "-p", action='append', dest='protocols', type=Protocol.__getitem__, default=list(Protocol), choices=[p.name for p in Protocol], help="specify a TLS protocol to be tested, can be used multiple times")
     args = parser.parse_args()
 
     results = scan_server(**args.__dict__)
