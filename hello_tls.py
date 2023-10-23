@@ -433,6 +433,8 @@ def get_server_certificate_chain(server_name:str, port: int = 443, timeout_in_se
 
 @dataclass
 class ServerScanResult:
+    server_name: str
+    port: int
     protocol_support: dict[str, bool]
     cipher_suites_tls_1_2: list[CipherSuite]
     cipher_suites_tls_1_3: list[CipherSuite]
@@ -447,6 +449,8 @@ def scan_server(server_name: str, port: int = 443, fetch_certificate_chain: bool
     Runs scans in parallel to speed up the process, with up to `max_workers` threads connecting at the same time.
     """
     result = ServerScanResult(
+        server_name=server_name,
+        port=port,
         certificate_chain=[],
         protocol_support={p.name: False for p in Protocol},
         cipher_suites_tls_1_2=[],
