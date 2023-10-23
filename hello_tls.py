@@ -1,8 +1,9 @@
 from multiprocessing.pool import ThreadPool
+from urllib.parse import urlparse
 from datetime import datetime
 from dataclasses import dataclass
 from enum import Enum
-from typing import Sequence
+from typing import Sequence, Tuple
 import socket
 import struct
 
@@ -498,15 +499,20 @@ def scan_server(server_name: str, port: int = 443, fetch_certificate_chain: bool
 
     return result
 
+def parse_target(target: str) -> Tuple[str, int]:
+    if not '//' in target:
+        # Without a scheme, urlparse will treat the target as a path.
+        # Prefix // to make it a netloc.
+        target = '//' + target
+    url = urlparse(target, scheme='https')
+    return url.netloc, url.port if url.port and url.scheme != 'http' else 443
+
 if __name__ == '__main__':
-    import sys
-    target = sys.argv[1] if len(sys.argv) > 1 else 'boppreh.com'
-    if ':' in target:
-        server_name, port_str = target.split(':', 1)
-        port = int(port_str)
-    else:
-        server_name = target
-        port = 443
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("target", help="Server to scan, in the form of 'example.com' or 'example.com:443'.")
+    args = parser.parse_args()
+    server_name, port = parse_target(args.target)
 
     import json, dataclasses
     class EnhancedJSONEncoder(json.JSONEncoder):
