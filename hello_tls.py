@@ -514,7 +514,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
         context.set_options(forbidden_versions)
         connection = SSL.Connection(context, sock)
         connection.settimeout(hello_prefs.timeout_in_seconds)
-        connection.connect((hello_prefs.server_host, port))
+        connection.connect((hello_prefs.server_host, hello_prefs.server_port))
         connection.setblocking(True)
         
         # Necessary for servers that expect SNI. Otherwise expect "tlsv1 alert internal error".
@@ -627,7 +627,7 @@ def scan_server(
 
     return result
 
-if __name__ == '__main__':
+def main():
     import argparse
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("target", help="server to scan, in the form of 'example.com', 'example.com:443', or even a full URL")
@@ -696,3 +696,6 @@ if __name__ == '__main__':
                 return o.isoformat()
             return super().default(o)
     json.dump(results, sys.stdout, indent=2, cls=EnhancedJSONEncoder)
+
+if __name__ == '__main__':
+    main()
