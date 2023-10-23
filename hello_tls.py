@@ -535,7 +535,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
 class ServerScanResult:
     host: str
     port: int
-    cipher_suites_per_protocol: dict[str, Sequence[CipherSuite]] | None = None
+    cipher_suites_per_protocol: dict[str, list[CipherSuite]] | None = None
     certificate_chain: list[Certificate] | None = None
 
 def scan_server(
@@ -564,7 +564,7 @@ def scan_server(
 
     tasks = []
     with ThreadPool(max_workers) as pool:
-        add_task = lambda f: tasks.append(pool.apply_async(f))
+        add_task = lambda f, args=(): tasks.append(pool.apply_async(f, args))
 
         if fetch_cert_chain:
             add_task(lambda: result.__setattr__(
@@ -574,13 +574,21 @@ def scan_server(
 
         if enumerate_cipher_suites:
             # Add an intermediary name to appease the type checker.
-            protocol_results: dict[str, Sequence[CipherSuite]] = {p.name: [] for p in protocols}
+            protocol_results: dict[str, list[CipherSuite]] = {p.name: [] for p in protocols}
             result.cipher_suites_per_protocol = protocol_results
+
+            def divide_items(items, n: int):
+                return [[item for i, item in enumerate(items) if i % n == j] for j in range(n)]
+            def do_enumeration(protocol: Protocol, cipher_suites: Sequence[CipherSuite]):
+                print('(', end='', flush=True)
+                accepted_cipher_suites = enumerate_server_cipher_suites(dataclasses.replace(hello_prefs, cipher_suites=cipher_suites, protocols=[protocol]))
+                protocol_results[protocol.name].extend(accepted_cipher_suites)
+                print(')', end='', flush=True)
+
             for protocol in protocols:
-                add_task(lambda p=protocol: protocol_results.__setitem__(
-                    p.name,
-                    enumerate_server_cipher_suites(dataclasses.replace(hello_prefs, protocols=[p]))
-                ))
+                all_cipher_suites = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
+                for cipher_suites in divide_items(all_cipher_suites, 3):
+                    add_task(do_enumeration, (protocol, cipher_suites))
 
         # Join all tasks, waiting for them to finish in any order.
         # pool.close() + pool.join() perform a similar job, but discard task errors.
