@@ -14,10 +14,10 @@ DEFAULT_MAX_WORKERS: int = 6
 
 class Protocol(Enum):
     # Keep protocols in order of preference.
-    TLS_1_3 = b"\x03\x04"
-    TLS_1_2 = b"\x03\x03"
-    TLS_1_1 = b"\x03\x02"
-    TLS_1_0 = b"\x03\x01"
+    TLS1_3 = b"\x03\x04"
+    TLS1_2 = b"\x03\x03"
+    TLS1_1 = b"\x03\x02"
+    TLS1_0 = b"\x03\x01"
     SSLv3 = b"\x03\x00"
 
     def __repr__(self):
@@ -251,10 +251,10 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
         return len(b).to_bytes(width_bytes, byteorder="big") + b
     def _get_client_hello_version(protocols: Sequence[Protocol]) -> bytes:
         versions = [protocol.value for protocol in protocols]
-        return min(Protocol.TLS_1_2.value, max(versions))
+        return min(Protocol.TLS1_2.value, max(versions))
     def _get_record_version(protocols: Sequence[Protocol]) -> bytes:
         # Record version cannot be higher than TLS 1.0 due to ossification.
-        return max(Protocol.TLS_1_0.value, _get_client_hello_version(protocols))
+        return max(Protocol.TLS1_0.value, _get_client_hello_version(protocols))
 
     return bytes((
         0x16, # Record type: handshake.
@@ -350,7 +350,7 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
                     0x00, 0x12, # Extension type: SCT. Allow server to return signed certificate timestamp.
                     0x00, 0x00, # Length of extension data.
 
-                    *((Protocol.TLS_1_3 in hello_prefs.protocols) * [ # This extension is only available in TLS 1.3.
+                    *((Protocol.TLS1_3 in hello_prefs.protocols) * [ # This extension is only available in TLS 1.3.
                         0x00, 0x2b,  # Extension type: supported version.
                         *_prefix_length(
                             _prefix_length(
@@ -574,10 +574,21 @@ if __name__ == '__main__':
     parser.add_argument("--server-name-indication", "-s", default=None, help=f"value to be used in the SNI extension, defaults to the target host")
     parser.add_argument("--certs", "-c", dest='fetch_cert_chain', default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
     parser.add_argument("--enumerate-cipher-suites", "-e", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites for each protocol")
-    parser.add_argument("--protocol", "-p", action='append', dest='protocols', type=Protocol.__getitem__, default=list(Protocol), choices=[p.name for p in Protocol], help="specify a TLS protocol to be tested, can be used multiple times")
+    def validate_protocol_flag(value):
+        try:
+            invalid_name = next(p for p in value.split(',') if p not in Protocol.__members__)
+            raise argparse.ArgumentTypeError(f"invalid protocol: {invalid_name}")
+        except StopIteration:
+            # No invalid names found, return the string as-is.
+            return value
+    parser.add_argument("--protocols", "-p", dest='protocols_str', type=validate_protocol_flag, default=','.join(p.name for p in Protocol), help="comma separated list of TLS/SSL protocols to test")
     args = parser.parse_args()
+    
+    kwargs = args.__dict__
+    kwargs['protocols'] = [Protocol[p] for p in args.protocols_str.split(',')]
+    del kwargs['protocols_str']
 
-    results = scan_server(**args.__dict__)
+    results = scan_server(**kwargs)
 
     import sys, json, dataclasses
     class EnhancedJSONEncoder(json.JSONEncoder):
