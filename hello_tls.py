@@ -402,6 +402,7 @@ def get_server_certificate_chain(server_name:str, port: int = 443, timeout_in_se
         return datetime.strptime(x509_time.decode('ascii'), '%Y%m%d%H%M%SZ')
     
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout_in_seconds)
         connection = SSL.Connection(SSL.Context(SSL.TLS_CLIENT_METHOD), sock)
         connection.connect((server_name, port))
         # Necessary for servers that expect SNI. Otherwise expect "tlsv1 alert internal error".
