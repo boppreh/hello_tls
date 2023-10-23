@@ -445,13 +445,10 @@ class Certificate:
     def key_usage(self):
         return self.extensions.get('keyUsage', '').split(', ') + self.extensions.get('extendedKeyUsage', '').split(', ')
     
-def get_server_certificate_chain(server_host: str, port: int = 443, server_name_indication: str | None = None, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[Certificate]:
+def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Certificate]:
     """
     Use socket and pyOpenSSL to get the server certificate chain.
     """
-    assert ':' not in server_host
-    assert '/' not in server_host
-
     from OpenSSL import SSL, crypto
 
     def _x509_name_to_dict(x509_name: crypto.X509Name) -> dict[str, str]:
@@ -462,16 +459,26 @@ def get_server_certificate_chain(server_host: str, port: int = 443, server_name_
             raise ValueError('Timestamp cannot be None')
         return datetime.strptime(x509_time.decode('ascii'), '%Y%m%d%H%M%SZ')
     
+    no_flag_by_protocol = {
+        Protocol.SSLv3: SSL.OP_NO_SSLv3,
+        Protocol.TLS1_0: SSL.OP_NO_TLSv1,
+        Protocol.TLS1_1: SSL.OP_NO_TLSv1_1,
+        Protocol.TLS1_2: SSL.OP_NO_TLSv1_2,
+        Protocol.TLS1_3: SSL.OP_NO_TLSv1_3,
+    }    
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         # This order of operations is necessary to work around a pyOpenSSL bug:
         # https://github.com/pyca/pyopenssl/issues/168#issuecomment-289194607
-        connection = SSL.Connection(SSL.Context(SSL.TLS_CLIENT_METHOD), sock)
-        connection.settimeout(timeout_in_seconds)
-        connection.connect((server_host, port))
+        context = SSL.Context(SSL.TLS_CLIENT_METHOD)
+        forbidden_versions = sum(no_flag_by_protocol[protocol] for protocol in Protocol if protocol not in hello_prefs.protocols)
+        context.set_options(forbidden_versions)
+        connection = SSL.Connection(context, sock)
+        connection.settimeout(hello_prefs.timeout_in_seconds)
+        connection.connect((hello_prefs.server_host, port))
         connection.setblocking(True)
         
         # Necessary for servers that expect SNI. Otherwise expect "tlsv1 alert internal error".
-        connection.set_tlsext_host_name((server_name_indication or server_host).encode('utf-8'))
+        connection.set_tlsext_host_name((hello_prefs.server_name_indication or hello_prefs.server_host).encode('utf-8'))
         connection.do_handshake()
         connection.shutdown()
 
@@ -536,7 +543,7 @@ def scan_server(
         if fetch_cert_chain:
             add_task(lambda: result.__setattr__(
                 'certificate_chain',
-                get_server_certificate_chain(host, port, server_name_indication, timeout_in_seconds)
+                get_server_certificate_chain(hello_prefs)
             ))
 
         if enumerate_cipher_suites:
