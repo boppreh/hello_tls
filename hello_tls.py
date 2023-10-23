@@ -43,13 +43,15 @@ class HandshakeType(Enum):
     message_hash = 25
 
 class CipherSuite(Enum):
+    # For compability.
+    TLS_EMPTY_RENEGOTIATION_INFO_SCSV = b"\x00\xff"
+
     # TLS 1.3 cipher suites.
     TLS_AES_128_GCM_SHA256 = b"\x13\x01"
     TLS_AES_256_GCM_SHA384 = b"\x13\x02"
     TLS_CHACHA20_POLY1305_SHA256 = b"\x13\x03"
     TLS_AES_128_CCM_SHA256 = b"\x13\x04"
     TLS_AES_128_CCM_8_SHA256 = b"\x13\x05"
-    TLS_EMPTY_RENEGOTIATION_INFO_SCSV = b"\x00\xff"
 
     # TLS 1.2 and lower cipher suites.
     TLS_RSA_WITH_3DES_EDE_CBC_SHA = b"\x00\x0a"
@@ -133,6 +135,19 @@ class CipherSuite(Enum):
     TLS_RSA_WITH_NULL_SHA256 = b'\x00\x3B'
     TLS_RSA_WITH_RC4_128_MD5 = b'\x00\x04'
     TLS_RSA_WITH_RC4_128_SHA = b'\x00\x05'
+
+TLS1_3_CIPHER_SUITES = [
+    CipherSuite.TLS_AES_128_GCM_SHA256,
+    CipherSuite.TLS_AES_256_GCM_SHA384,
+    CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
+    CipherSuite.TLS_AES_128_CCM_SHA256,
+    CipherSuite.TLS_AES_128_CCM_8_SHA256,
+    CipherSuite.TLS_EMPTY_RENEGOTIATION_INFO_SCSV
+]
+TLS1_2_AND_LOWER_CIPHER_SUITES = [
+    *(suite for suite in CipherSuite if suite not in TLS1_3_CIPHER_SUITES),
+    CipherSuite.TLS_EMPTY_RENEGOTIATION_INFO_SCSV
+]
 
 class AlertLevel(Enum):
     """ Different alert levels that can be sent by the server. """
@@ -580,7 +595,7 @@ if __name__ == '__main__':
     try:
         protocols = [Protocol[p] for p in args.protocols_str.split(',')]
     except KeyError as e:
-        parser.error(f'invalid protocol name: {e.args[0]}')
+        parser.error(f'invalid protocol name "{e.args[0]}", must be one of {", ".join(p.name for p in Protocol)}')
 
     from urllib.parse import urlparse
     if not '//' in args.target:
