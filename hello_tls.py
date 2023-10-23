@@ -10,6 +10,8 @@ import struct
 DEFAULT_TIMEOUT: float = 2
 # Default number of workers/threads/concurrent connectiosn to use.
 DEFAULT_MAX_WORKERS: int = 6
+# Maximum number of cipher suite groups to divide when enumerating.
+MAX_WORKERS_PER_PROTOCOL: int = 3
 
 class Protocol(Enum):
     # Keep protocols in order of preference.
@@ -577,18 +579,27 @@ def scan_server(
             protocol_results: dict[str, list[CipherSuite]] = {p.name: [] for p in protocols}
             result.cipher_suites_per_protocol = protocol_results
 
-            def divide_items(items, n: int):
-                return [[item for i, item in enumerate(items) if i % n == j] for j in range(n)]
+            def start_enumeration(protocol: Protocol):
+                # Checks if the server supports this protocol, and if so, start enumerating cipher suites.
+                all_cipher_suites = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
+                first_cipher_suite = get_server_preferred_cipher_suite(dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=all_cipher_suites))
+                if not first_cipher_suite:
+                    # The server doesn't support this protocol at all.
+                    return
+                # Register the cipher suite we found.
+                protocol_results[protocol.name].append(first_cipher_suite)
+                # Divide remaining cipher suites in groups and enumerate them in parallel.
+                # Use % to distribute "desirable" cipher suites evenly.
+                n_groups = min(max_workers, MAX_WORKERS_PER_PROTOCOL)
+                groups = [[suite for i, suite in enumerate(all_cipher_suites) if i % n_groups == j and suite != first_cipher_suite] for j in range(n_groups)]
+                for cipher_suites in groups:
+                    add_task(do_enumeration, (protocol, cipher_suites))
             def do_enumeration(protocol: Protocol, cipher_suites: Sequence[CipherSuite]):
-                print('(', end='', flush=True)
                 accepted_cipher_suites = enumerate_server_cipher_suites(dataclasses.replace(hello_prefs, cipher_suites=cipher_suites, protocols=[protocol]))
                 protocol_results[protocol.name].extend(accepted_cipher_suites)
-                print(')', end='', flush=True)
 
             for protocol in protocols:
-                all_cipher_suites = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
-                for cipher_suites in divide_items(all_cipher_suites, 3):
-                    add_task(do_enumeration, (protocol, cipher_suites))
+                add_task(start_enumeration, (protocol,))
 
         # Join all tasks, waiting for them to finish in any order.
         # pool.close() + pool.join() perform a similar job, but discard task errors.
