@@ -7,7 +7,7 @@ from typing import Sequence, Tuple
 import socket
 import struct
 
-# Default socket timeout, in seconds.
+# Default socket connection timeout, in seconds.
 DEFAULT_TIMEOUT: float = 2
 
 class Protocol(Enum):
@@ -391,7 +391,6 @@ def get_server_certificate_chain(server_name:str, port: int = 443, timeout_in_se
     Use socket and pyOpenSSL to get the server certificate chain.
     """
     from OpenSSL import SSL, crypto
-    import socket
 
     def _x509_name_to_dict(x509_name: crypto.X509Name) -> dict[str, str]:
         return {name.decode('utf-8'): value.decode('utf-8') for name, value in x509_name.get_components()}
@@ -402,12 +401,17 @@ def get_server_certificate_chain(server_name:str, port: int = 443, timeout_in_se
         return datetime.strptime(x509_time.decode('ascii'), '%Y%m%d%H%M%SZ')
     
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(timeout_in_seconds)
+        # This order of operations is necessary to work around a pyOpenSSL bug:
+        # https://github.com/pyca/pyopenssl/issues/168#issuecomment-289194607
         connection = SSL.Connection(SSL.Context(SSL.TLS_CLIENT_METHOD), sock)
+        connection.settimeout(timeout_in_seconds)
         connection.connect((server_name, port))
+        connection.setblocking(True)
+        
         # Necessary for servers that expect SNI. Otherwise expect "tlsv1 alert internal error".
         connection.set_tlsext_host_name(server_name.encode('utf-8'))
         connection.do_handshake()
+        connection.shutdown()
 
     raw_certs = connection.get_peer_cert_chain()
 
