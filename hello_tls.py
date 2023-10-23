@@ -1,10 +1,13 @@
 from multiprocessing.pool import ThreadPool
 from datetime import datetime
-import dataclasses
-from enum import Enum
 from typing import Sequence
+from enum import Enum
+import dataclasses
+import logging
 import socket
 import struct
+
+logger = logging.getLogger(__name__)
 
 # Default socket connection timeout, in seconds.
 DEFAULT_TIMEOUT: float = 2
@@ -21,6 +24,8 @@ class Protocol(Enum):
     TLS1_0 = b"\x03\x01"
     SSLv3 = b"\x03\x00"
 
+    def __str__(self):
+        return self.name
     def __repr__(self):
         return self.name
 
@@ -390,22 +395,11 @@ def send_hello(hello_prefs: TlsHelloSettings) -> bytes:
     """
     Sends a Client Hello packet to the server based on hello_prefs, and returns the first few bytes of the server response.
     """
+    logger.debug(f"Sending Client Hello to {hello_prefs.server_host}:{hello_prefs.server_port}")
     with socket.create_connection((hello_prefs.server_host, hello_prefs.server_port), timeout=hello_prefs.timeout_in_seconds) as sock:
         sock.send(make_client_hello(hello_prefs))
         return sock.recv(512)
 
-def test_server_protocol(hello_prefs: TlsHelloSettings) -> bool:
-    """
-    Attempts to connect to the server using the given protocol, returning True if the server didn't complain about the version.
-    """
-    response = send_hello(hello_prefs)
-    if (error := try_parse_server_error(response)) and error.description == AlertDescription.protocol_version:
-        return False
-    else:
-        # Other issues, like cipher suite mismatch or lack of application data, are not interesting.
-        # If there are any issues that can happen *before* the protocol version is checked, we should add them here.
-        return True
-        
 def get_server_preferred_cipher_suite(hello_prefs: TlsHelloSettings) -> CipherSuite | None:
     """
     Attempts to connect to the server and returns the cipher suite picked by the server, if any.
@@ -413,6 +407,7 @@ def get_server_preferred_cipher_suite(hello_prefs: TlsHelloSettings) -> CipherSu
     """
     response = send_hello(hello_prefs)
     if error := try_parse_server_error(response):
+        logger.info(f"Server rejected Client Hello: {error.description.name}")
         if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure]:
             return None
         else:
@@ -426,6 +421,7 @@ def get_server_preferred_cipher_suite(hello_prefs: TlsHelloSettings) -> CipherSu
     )
     if not is_protocol_expected:
         # Server picked a protocol we didn't ask for.
+        logger.info(f"Server attempted to downgrade protocol to unsupported version {server_hello.legacy_server_protocol}")
         return None
     
     return server_hello.cipher_suite
@@ -436,6 +432,7 @@ def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[Ci
     removing the accepted cipher suite from the list each time.
     Returns a list of all cipher suites the server accepted.
     """
+    logger.info(f"Testing support of {len(hello_prefs.cipher_suites)} cipher suites with protocols {hello_prefs.protocols}")
     cipher_suites_to_test = list(hello_prefs.cipher_suites)
     accepted_cipher_suites = []
     while cipher_suites_to_test:
@@ -446,6 +443,7 @@ def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[Ci
             cipher_suites_to_test.remove(cipher_suite_picked)
         else:
             break
+    logger.info(f"Server accepted {len(accepted_cipher_suites)} cipher suites with protocols {hello_prefs.protocols}")
     return accepted_cipher_suites
 
 @dataclasses.dataclass
@@ -493,7 +491,8 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
         Protocol.TLS1_1: SSL.OP_NO_TLSv1_1,
         Protocol.TLS1_2: SSL.OP_NO_TLSv1_2,
         Protocol.TLS1_3: SSL.OP_NO_TLSv1_3,
-    }    
+    }
+    logger.info("Fetching certificate chain with pyOpenSSL")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         # This order of operations is necessary to work around a pyOpenSSL bug:
         # https://github.com/pyca/pyopenssl/issues/168#issuecomment-289194607
@@ -514,6 +513,8 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
 
     if raw_certs is None:
         raise ValueError('Server did not give any certificate chain')
+    
+    logger.info(f"Received {len(raw_certs)} certificates")
     
     nice_certs: list[Certificate] = []
     for raw_cert in raw_certs:
@@ -557,6 +558,7 @@ def scan_server(
 
     Runs scans in parallel to speed up the process, with up to `max_workers` threads connecting at the same time.
     """
+    logger.info(f"Scanning {host}:{port}")
     hello_prefs = TlsHelloSettings(host, port, timeout_in_seconds, server_name_indication=server_name_indication, protocols=protocols)
 
     result = ServerScanResult(
@@ -568,6 +570,7 @@ def scan_server(
 
     tasks = []
     with ThreadPool(max_workers) as pool:
+        logger.debug("Initializing workers")
         add_task = lambda f, args=(): tasks.append(pool.apply_async(f, args))
 
         if fetch_cert_chain:
@@ -582,10 +585,12 @@ def scan_server(
 
             def start_enumeration(protocol: Protocol):
                 """ Checks if the server supports this protocol, and if so, start enumerating cipher suites. """
-                all_cipher_suites = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
-                first_cipher_suite = get_server_preferred_cipher_suite(dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=all_cipher_suites))
+                suites_to_test = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
+                logger.debug(f"Testing server support for {protocol}")
+                first_cipher_suite = get_server_preferred_cipher_suite(dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=suites_to_test))
                 if not first_cipher_suite:
                     # The server doesn't support this protocol at all.
+                    logger.info(f"Server does not support {protocol}")
                     return
                 # Register the cipher suite we found.
                 accepted_cipher_suites = [first_cipher_suite]
@@ -593,7 +598,8 @@ def scan_server(
                 # Divide remaining cipher suites in groups and enumerate them in parallel.
                 # Use % to distribute "desirable" cipher suites evenly.
                 n_groups = min(max_workers, MAX_WORKERS_PER_PROTOCOL)
-                groups = [[suite for i, suite in enumerate(all_cipher_suites) if i % n_groups == j and suite != first_cipher_suite] for j in range(n_groups)]
+                groups = [[suite for i, suite in enumerate(suites_to_test) if i % n_groups == j and suite != first_cipher_suite] for j in range(n_groups)]
+                logger.debug(f"Starting enumeration of cipher suites for {protocol}")
                 for cipher_suite_group in groups:
                     prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=cipher_suite_group)
                     add_task(lambda prefs=prefs: accepted_cipher_suites.extend(enumerate_server_cipher_suites(prefs)))
@@ -618,7 +624,15 @@ if __name__ == '__main__':
     parser.add_argument("--certs", "-c", default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
     parser.add_argument("--enumerate-cipher-suites", "-e", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites for each protocol")
     parser.add_argument("--protocols", "-p", dest='protocols_str', default=','.join(p.name for p in Protocol), help="comma separated list of TLS/SSL protocols to test")
+    parser.add_argument("--verbose", "-v", action="count", default=0, help="increase output verbosity")
     args = parser.parse_args()
+
+    logging.basicConfig(
+        datefmt='%Y-%m-%d %H:%M:%S',
+        format='{asctime}.{msecs:0<3.0f} {module} {threadName} {levelname}: {message}',
+        style='{',
+        level=[logging.WARNING, logging.INFO, logging.DEBUG][min(2, args.verbose)]
+    )
     
     if not args.protocols_str:
         parser.error("no protocols to test")
@@ -626,6 +640,10 @@ if __name__ == '__main__':
         protocols = [Protocol[p] for p in args.protocols_str.split(',')]
     except KeyError as e:
         parser.error(f'invalid protocol name "{e.args[0]}", must be one of {", ".join(p.name for p in Protocol)}')
+
+    total_workers = int(args.certs) + int(args.enumerate_cipher_suites) * len(protocols) * MAX_WORKERS_PER_PROTOCOL
+    if args.max_workers > total_workers:
+        logging.warning(f'--max-workers is {args.max_workers}, but only {total_workers} workers will ever be used at once')
 
     from urllib.parse import urlparse
     if not '//' in args.target:
