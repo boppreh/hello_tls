@@ -592,6 +592,9 @@ if __name__ == '__main__':
     host = url.hostname or 'localhost'
     port = url.port if url.port and url.scheme != 'http' else 443
 
+    if args.certs and protocols == [Protocol.SSLv3]:
+        parser.error("SSLv3 is not supported by pyOpenSSL, so `--protocols SSLv3` must be used with `--no-certs`")
+
     results = scan_server(
         host,
         port=port,
