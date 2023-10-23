@@ -565,17 +565,15 @@ if __name__ == '__main__':
     parser.add_argument("--server-name-indication", "-s", default='', help=f"value to be used in the SNI extension, defaults to the target host")
     parser.add_argument("--certs", "-c", default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
     parser.add_argument("--enumerate-cipher-suites", "-e", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites for each protocol")
-    def validate_protocol_flag(value):
-        try:
-            invalid_name = next(p for p in value.split(',') if p not in Protocol.__members__)
-            raise argparse.ArgumentTypeError(f"invalid protocol: {invalid_name}")
-        except StopIteration:
-            # No invalid names found, return the string as-is.
-            return value
-    parser.add_argument("--protocols", "-p", dest='protocols_str', type=validate_protocol_flag, default=','.join(p.name for p in Protocol), help="comma separated list of TLS/SSL protocols to test")
+    parser.add_argument("--protocols", "-p", dest='protocols_str', default=','.join(p.name for p in Protocol), help="comma separated list of TLS/SSL protocols to test")
     args = parser.parse_args()
     
-    protocols = [Protocol[p] for p in args.protocols_str.split(',')]
+    if not args.protocols_str:
+        parser.error("no protocols to test")
+    try:
+        protocols = [Protocol[p] for p in args.protocols_str.split(',')]
+    except KeyError as e:
+        parser.error(f'invalid protocol name: {e.args[0]}')
 
     from urllib.parse import urlparse
     if not '//' in args.target:
