@@ -498,10 +498,17 @@ def get_server_certificate_chain(server_name: str, port: int = 443, timeout_in_s
 class ServerScanResult:
     host: str
     port: int
-    cipher_suites_per_protocol: dict[str, Sequence[CipherSuite] | None]
+    cipher_suites_per_protocol: dict[str, Sequence[CipherSuite]]
     certificate_chain: list[Certificate]
 
-def scan_server(target: str, port: int = 443, fetch_cert_chain: bool = True, max_workers: int = DEFAULT_MAX_WORKERS, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerScanResult:
+def scan_server(
+    target: str,
+    port: int = 443,
+    enumerate_cipher_suites: bool = True,
+    fetch_cert_chain: bool = True,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    timeout_in_seconds: float | None = DEFAULT_TIMEOUT
+    ) -> ServerScanResult:
     """
     Scans a SSL/TLS server for supported protocols, cipher suites, and certificate chain.
 
@@ -517,7 +524,7 @@ def scan_server(target: str, port: int = 443, fetch_cert_chain: bool = True, max
         host=host,
         port=port,
         certificate_chain=[],
-        cipher_suites_per_protocol={p.name: None for p in Protocol}
+        cipher_suites_per_protocol={p.name: [] for p in Protocol}
     )
 
     tasks = []
@@ -529,10 +536,12 @@ def scan_server(target: str, port: int = 443, fetch_cert_chain: bool = True, max
                 get_server_certificate_chain(host, port, timeout_in_seconds)
             ))
 
-        for protocol in Protocol:
-            add_task(lambda protocol=protocol: result.cipher_suites_per_protocol.update({
-                protocol.name: enumerate_server_cipher_suites(dataclasses.replace(hello_prefs, protocols=[protocol]))
-            }))
+        if enumerate_cipher_suites:
+            for protocol in Protocol:
+                hello_prefs = dataclasses.replace(hello_prefs, protocols=[protocol])
+                add_task(lambda: result.cipher_suites_per_protocol.update({
+                    protocol.name: enumerate_server_cipher_suites(hello_prefs)
+                }))
 
         # Join all tasks, waiting for them to finish in any order.
         # pool.close() + pool.join() perform a similar job, but discard task errors.
@@ -556,6 +565,7 @@ if __name__ == '__main__':
     parser.add_argument("--timeout", "-t", dest="timeout_in_seconds", type=float, default=DEFAULT_TIMEOUT, help=f"socket timeout in seconds")
     parser.add_argument("--max-workers", "-w", type=int, default=DEFAULT_MAX_WORKERS, help=f"maximum number of threads/concurrent connections to use for scanning")
     parser.add_argument("--certs", "-c", dest='fetch_cert_chain', default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
+    parser.add_argument("--enumerate-cipher-suites", "-e", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites for each protocol")
     args = parser.parse_args()
 
     results = scan_server(**args.__dict__)
