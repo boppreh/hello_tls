@@ -6,6 +6,7 @@ from typing import Sequence
 import socket
 import struct
 
+# Default socket timeout, in seconds.
 DEFAULT_TIMEOUT: float = 2
 
 class Protocol(Enum):
@@ -142,12 +143,6 @@ class AlertDescription(Enum):
     certificate_required = 116
     no_application_protocol = 120
 
-def to_uint24(n: int) -> bytes: return n.to_bytes(3, byteorder="big")
-def to_uint8(n: int) -> bytes: return n.to_bytes(1, byteorder="big")
-def to_uint16(n: int) -> bytes: return n.to_bytes(2, byteorder="big")
-def from_uint8(b: bytes) -> int: return int.from_bytes(b, byteorder="big")
-from_uint16 = from_uint8
-
 class ServerError(Exception):
     def __init__(self, protocol: Protocol, level: AlertLevel, alert: AlertDescription):
         super().__init__(self, f'Server error ({protocol}): {level}: {alert}')
@@ -169,14 +164,14 @@ class ServerHello:
             raise ValueError('Empty response')
         if packet[0] == 0x15:
             # Alert record
-            record_type, legacy_record_version, length = struct.unpack('!BHH', packet[:5])
+            record_type, legacy_record_version, length = struct.unpack('!B2sH', packet[:5])
             assert record_type == 0x15
             alert_level_id, alert_description_id = struct.unpack('!BB', packet[5:7])
-            raise ServerError(Protocol(to_uint16(legacy_record_version)), AlertLevel(alert_level_id), AlertDescription(alert_description_id))
+            raise ServerError(Protocol(legacy_record_version), AlertLevel(alert_level_id), AlertDescription(alert_description_id))
         
         assert packet[0] == 0x16
         
-        begin_format = "!BHHB3sH32sB"
+        begin_format = "!BHHB3s2s32sB"
         begin_length = struct.calcsize(begin_format)
         begin_packet = packet[:begin_length]
         (
@@ -185,7 +180,7 @@ class ServerHello:
             handshake_length,
             handshake_type,
             server_hello_length,
-            server_version_int,
+            server_version,
             server_random,
             session_id_length,
         ) = struct.unpack(begin_format, begin_packet)
@@ -193,14 +188,25 @@ class ServerHello:
         assert record_type == 0x16
         assert legacy_record_version in [0x0301, 0x0302, 0x0303]
         assert handshake_type == 0x02
-        assert server_version_int in [0x0301, 0x0302, 0x0303]
         assert session_id_length in [0, 0x20]
 
         cipher_suite_start = begin_length+session_id_length
         cipher_suite_id = packet[cipher_suite_start:cipher_suite_start+2]
         # TODO: protocol is wrong for TLS 1.3 because it appears as an extension.
-        return ServerHello(Protocol(to_uint16(server_version_int)), CipherSuite(cipher_suite_id))
-    
+        return ServerHello(Protocol(server_version), CipherSuite(cipher_suite_id))
+
+def _prefix_length(b: bytes, width_bytes: int = 2) -> bytes:
+    """
+    Returns `b` prefixed with its length, encoded as a big-endian integer of `width_bytes` bytes.
+    """
+    return len(b).to_bytes(width_bytes, byteorder="big") + b
+def _get_client_hello_version(allowed_protocols: Sequence[Protocol]) -> bytes:
+    versions = [protocol.value for protocol in allowed_protocols]
+    return min(Protocol.TLS_1_2.value, max(versions))
+def _get_record_version(allowed_protocols: Sequence[Protocol]) -> bytes:
+    # Record version cannot be higher than TLS 1.0 due to ossification.
+    return max(Protocol.TLS_1_0.value, _get_client_hello_version(allowed_protocols))
+
 @dataclass
 class ClientHello:
     server_name: str
@@ -211,139 +217,117 @@ class ClientHello:
         """
         Generates a Client Hello packet for the given server name and settings.
         """
-        cipher_suites = b"".join(cipher_suite.value for cipher_suite in self.allowed_cipher_suites)
-
-        curves = bytes((
-            0x00, 0x1d,  # Curve "x25519".
-            0x00, 0x17,  # Curve "secp256r1".
-            0x00, 0x1e,  # Curve "x448".
-            0x00, 0x18,  # Curve "secp384r1".
-            0x00, 0x19,  # Curve "secp521r1".
-            0x01, 0x00,  # Curve "ffdhe2048".
-            0x01, 0x01,  # Curve "ffdhe3072".
-            0x01, 0x02,  # Curve "ffdhe4096".
-            0x01, 0x03,  # Curve "ffdhe6144".
-            0x01, 0x04,  # Curve "ffdhe8192".
-        ))
-
-        signature_algorithms = bytes((
-            0x04, 0x03, # ECDSA-SECP256r1-SHA256
-            0x05, 0x03, # ECDSA-SECP384r1-SHA384
-            0x06, 0x03, # ECDSA-SECP521r1-SHA512
-            0x08, 0x07, # ED25519
-            0x08, 0x08, # ED448
-            0x08, 0x09, # RSA-PSS-PSS-SHA256
-            0x08, 0x0a, # RSA-PSS-PSS-SHA384
-            0x08, 0x0b, # RSA-PSS-PSS-SHA512
-            0x08, 0x04, # RSA-PSS-RSAE-SHA256
-            0x08, 0x05, # RSA-PSS-RSAE-SHA384
-            0x08, 0x06, # RSA-PSS-RSAE-SHA512
-            0x04, 0x01, # RSA-PKCS1-SHA256
-            0x05, 0x01, # RSA-PKCS1-SHA384
-            0x06, 0x01, # RSA-PKCS1-SHA512
-            0x02, 0x01, # RSA-PKCS1-SHA1
-            0x02, 0x03, # ECDSA-SHA1
-        ))
-
-        if Protocol.TLS_1_3 in self.allowed_protocols:
-            # This extension is only available in TLS 1.3.
-            supported_versions = b"".join(protocol.value for protocol in self.allowed_protocols)
-            supported_version_extension = bytes((
-                0x00, 0x2b,  # Extension type: supported version.
-                *to_uint16(len(supported_versions)+1), # Length of extension data.
-                *to_uint8(len(supported_versions)), # Supported versions length.
-                *supported_versions
-            ))
-        else:
-            supported_version_extension = b""
-
-        extensions = bytes((
-            0x00, 0x00,  # Extension type: server_name.
-            *to_uint16(len(self.server_name) + 5),  # Length of extension data.
-            *to_uint16(len(self.server_name) + 3),  # Length of server_name list.
-            0x00,  # Name type: host_name.
-            *to_uint16(len(self.server_name)),  # Length of host_name.
-            *self.server_name.encode("ascii"),
-
-            0x00, 0x05, # Extension type: status_request. Allow server to send OCSP information.
-            0x00, 0x05, # Length of extension data.
-            0x01, # Certificate status type: OCSP.
-            0x00, 0x00, # Responder ID list length.
-            0x00, 0x00, # Request extension information length.
-
-            0x00, 0x0b,  # Extension type: EC point formats.
-            0x00, 0x04,  # Length of extension data.
-            0x03,  # Length of EC point formats list.
-            0x00,  # EC point format: uncompressed.
-            0x01,  # EC point format: ansiX962_compressed_prime.
-            0x02,  # EC point format: ansiX962_compressed_char2.
-
-            0x00, 0x0a,  # Extension type: supported groups (mostly EC curves).
-            *to_uint16(len(curves) + 2),  # Length of extension data.
-            *to_uint16(len(curves)),  # Length of supported groups list.
-            *curves,
-
-            0x00, 0x23,  # Extension type: session ticket.
-            0x00, 0x00,  # No session ticket data follows.
-
-            0x00, 0x16,  # Extension type: encrypt-then-MAC.
-            0x00, 0x00,  # Length of extension data.
-
-            0x00, 0x17,  # Extension type: extended master secret.
-            0x00, 0x00,  # No extension data follows.
-
-            0x00, 0x0d,  # Extension type: signature algorithms.
-            *to_uint16(len(signature_algorithms) + 2),  # Length of extension data.
-            *to_uint16(len(signature_algorithms)),  # Length of algorithm list.
-            *signature_algorithms,
-
-            0xff, 0x01, # Extension type: renegotiation_info (TLS 1.2 or lower).
-            0x00, 0x01, # Length of extension data.
-            0x00, # Renegotiation info length.
-
-            0x00, 0x12, # Extension type: SCT. Allow server to return signed certificate timestamp.
-            0x00, 0x00, # Length of extension data.
-
-            *supported_version_extension, # Present only in TLS 1.3.
-
-            # TODO: PSK key exchange modes extension.
-            0x00, 0x2d, 0x00, 0x02, 0x01, 0x01,
-            
-            # TODO: key share extension.
-            0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20, 0x35, 0x80, 0x72, 0xd6, 0x36, 0x58, 0x80, 0xd1, 0xae, 0xea, 0x32, 0x9a, 0xdf, 0x91, 0x21, 0x38, 0x38, 0x51, 0xed, 0x21, 0xa2, 0x8e, 0x3b, 0x75, 0xe9, 0x65, 0xd0, 0xd2, 0xcd, 0x16, 0x62, 0x54,
-        ))
-
-        client_hello_version = max(self.allowed_protocols, key=lambda protocol: protocol.value)
-        if client_hello_version == Protocol.TLS_1_3:
-            client_hello_version = Protocol.TLS_1_2
-        client_hello = bytes((
-            *client_hello_version.value,  # Legacy client version: max TLS 1.2 (because ossification).
-            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,  # "Random".
-            0x20,  # Legacy session ID length.
-            0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xee, 0xef, 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,  # Legacy session ID.
-            *to_uint16(len(cipher_suites)),
-            *cipher_suites,
-            0x01,  # Legacy compression methods length.
-            0x00,  # Legacy compression method: null.
-            *to_uint16(len(extensions)),
-            *extensions,
-        ))
-
-        handshake = bytes((
-            0x01,  # Handshake type: Client Hello.
-            *to_uint24(len(client_hello)),
-            *client_hello,
-        ))
-
-        record_version = Protocol.SSLv3 if client_hello_version == Protocol.SSLv3 else Protocol.TLS_1_0
-        record = bytes((
+        return bytes((
             0x16, # Record type: handshake.
-            *record_version.value, # Legacy record version: max TLS 1.0 (because ossification).
-            *to_uint16(len(handshake)),
-            *handshake,
-        ))
+            *_get_record_version(self.allowed_protocols), # Legacy record version: max TLS 1.0.
+            *_prefix_length(bytes([ # Handshake record.
+                0x01,  # Handshake type: Client Hello.
+                *_prefix_length(width_bytes=3, b=bytes([ # Client hello handshake.
+                    *_get_client_hello_version(self.allowed_protocols),  # Legacy client version: max TLS 1.2.
+                    *32*[0x07],  # Random. Any value will do.
+                    32,  # Legacy session ID length.
+                    *32*[0x07],  # Legacy session ID. Any value will do.
+                    *_prefix_length( # Cipher suites.
+                        b"".join(cipher_suite.value for cipher_suite in self.allowed_cipher_suites)
+                    ),
+                    0x01,  # Legacy compression methods length.
+                    0x00,  # Legacy compression method: null.
+                    
+                    *_prefix_length(bytes([ # Extensions.
+                        0x00, 0x00,  # Extension type: server_name.
+                        *_prefix_length( # Extension data.
+                            _prefix_length( # server_name list
+                                b'\x00' + # Name type: host_name.
+                                _prefix_length(self.server_name.encode('ascii'))
+                            )
+                        ),
 
-        return record
+                        0x00, 0x05, # Extension type: status_request. Allow server to send OCSP information.
+                        0x00, 0x05, # Length of extension data.
+                        0x01, # Certificate status type: OCSP.
+                        0x00, 0x00, # Responder ID list length.
+                        0x00, 0x00, # Request extension information length.
+
+                        0x00, 0x0b,  # Extension type: EC point formats.
+                        0x00, 0x04,  # Length of extension data.
+                        0x03,  # Length of EC point formats list.
+                        0x00,  # EC point format: uncompressed.
+                        0x01,  # EC point format: ansiX962_compressed_prime.
+                        0x02,  # EC point format: ansiX962_compressed_char2.
+
+                        0x00, 0x0a,  # Extension type: supported groups (mostly EC curves).
+                        *_prefix_length( # Extension data.
+                            _prefix_length(bytes([ # Supported groups list.
+                                0x00, 0x1d, # Curve "x25519".
+                                0x00, 0x17, # Curve "secp256r1".
+                                0x00, 0x1e, # Curve "x448".
+                                0x00, 0x18, # Curve "secp384r1".
+                                0x00, 0x19, # Curve "secp521r1".
+                                0x01, 0x00, # Curve "ffdhe2048".
+                                0x01, 0x01, # Curve "ffdhe3072".
+                                0x01, 0x02, # Curve "ffdhe4096".
+                                0x01, 0x03, # Curve "ffdhe6144".
+                                0x01, 0x04, # Curve "ffdhe8192".
+                            ]))
+                        ),
+
+                        0x00, 0x23,  # Extension type: session ticket.
+                        0x00, 0x00,  # No session ticket data follows.
+
+                        0x00, 0x16,  # Extension type: encrypt-then-MAC.
+                        0x00, 0x00,  # Length of extension data.
+
+                        0x00, 0x17,  # Extension type: extended master secret.
+                        0x00, 0x00,  # No extension data follows.
+
+                        0x00, 0x0d,  # Extension type: signature algorithms.
+                        *_prefix_length( # Extension data.
+                            _prefix_length(bytes([ # Signature algorithm list.
+                                0x04, 0x03, # ECDSA-SECP256r1-SHA256
+                                0x05, 0x03, # ECDSA-SECP384r1-SHA384
+                                0x06, 0x03, # ECDSA-SECP521r1-SHA512
+                                0x08, 0x07, # ED25519
+                                0x08, 0x08, # ED448
+                                0x08, 0x09, # RSA-PSS-PSS-SHA256
+                                0x08, 0x0a, # RSA-PSS-PSS-SHA384
+                                0x08, 0x0b, # RSA-PSS-PSS-SHA512
+                                0x08, 0x04, # RSA-PSS-RSAE-SHA256
+                                0x08, 0x05, # RSA-PSS-RSAE-SHA384
+                                0x08, 0x06, # RSA-PSS-RSAE-SHA512
+                                0x04, 0x01, # RSA-PKCS1-SHA256
+                                0x05, 0x01, # RSA-PKCS1-SHA384
+                                0x06, 0x01, # RSA-PKCS1-SHA512
+                                0x02, 0x01, # RSA-PKCS1-SHA1
+                                0x02, 0x03, # ECDSA-SHA1
+                            ]))
+                        ),
+
+                        0xff, 0x01, # Extension type: renegotiation_info (TLS 1.2 or lower).
+                        0x00, 0x01, # Length of extension data.
+                        0x00, # Renegotiation info length.
+
+                        0x00, 0x12, # Extension type: SCT. Allow server to return signed certificate timestamp.
+                        0x00, 0x00, # Length of extension data.
+
+                        *((Protocol.TLS_1_3 in self.allowed_protocols) * [ # This extension is only available in TLS 1.3.
+                            0x00, 0x2b,  # Extension type: supported version.
+                            *_prefix_length(
+                                _prefix_length(
+                                    b"".join(protocol.value for protocol in self.allowed_protocols),
+                                    width_bytes=1
+                                )
+                            )
+                        ]),
+
+                        # TODO: PSK key exchange modes extension.
+                        0x00, 0x2d, 0x00, 0x02, 0x01, 0x01,
+                        
+                        # TODO: key share extension.
+                        0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20, 0x35, 0x80, 0x72, 0xd6, 0x36, 0x58, 0x80, 0xd1, 0xae, 0xea, 0x32, 0x9a, 0xdf, 0x91, 0x21, 0x38, 0x38, 0x51, 0xed, 0x21, 0xa2, 0x8e, 0x3b, 0x75, 0xe9, 0x65, 0xd0, 0xd2, 0xcd, 0x16, 0x62, 0x54,
+                    ]))
+                ]))
+            ]))
+        ))
     
     def send(self, port: int = 443, server_name: str | None = None, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerHello:
         """
