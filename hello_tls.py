@@ -571,7 +571,7 @@ if __name__ == '__main__':
     parser.add_argument("target", help="server to scan, in the form of 'example.com', 'example.com:443', or even a full URL")
     parser.add_argument("--timeout", "-t", dest="timeout_in_seconds", type=float, default=DEFAULT_TIMEOUT, help=f"socket timeout in seconds")
     parser.add_argument("--max-workers", "-w", type=int, default=DEFAULT_MAX_WORKERS, help=f"maximum number of threads/concurrent connections to use for scanning")
-    parser.add_argument("--server-name-indication", "-s", default=None, help=f"value to be used in the SNI extension, defaults to the target host")
+    parser.add_argument("--server-name-indication", "-s", default='', help=f"value to be used in the SNI extension, defaults to the target host")
     parser.add_argument("--certs", "-c", dest='fetch_cert_chain', default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
     parser.add_argument("--enumerate-cipher-suites", "-e", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites for each protocol")
     def validate_protocol_flag(value):
