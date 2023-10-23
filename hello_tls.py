@@ -537,8 +537,8 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
 class ServerScanResult:
     host: str
     port: int
-    cipher_suites_per_protocol: dict[str, list[CipherSuite]] | None = None
-    certificate_chain: list[Certificate] | None = None
+    cipher_suites_per_protocol: dict[str, list[CipherSuite]]
+    certificate_chain: list[Certificate] | None
 
 def scan_server(
     host: str,
@@ -562,6 +562,8 @@ def scan_server(
     result = ServerScanResult(
         host=host,
         port=port,
+        cipher_suites_per_protocol={},
+        certificate_chain=None,
     )
 
     tasks = []
@@ -576,27 +578,25 @@ def scan_server(
 
         if enumerate_cipher_suites:
             # Add an intermediary name to appease the type checker.
-            protocol_results: dict[str, list[CipherSuite]] = {p.name: [] for p in protocols}
-            result.cipher_suites_per_protocol = protocol_results
+            result.cipher_suites_per_protocol = {p.name: [] for p in protocols}
 
             def start_enumeration(protocol: Protocol):
-                # Checks if the server supports this protocol, and if so, start enumerating cipher suites.
+                """ Checks if the server supports this protocol, and if so, start enumerating cipher suites. """
                 all_cipher_suites = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
                 first_cipher_suite = get_server_preferred_cipher_suite(dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=all_cipher_suites))
                 if not first_cipher_suite:
                     # The server doesn't support this protocol at all.
                     return
                 # Register the cipher suite we found.
-                protocol_results[protocol.name].append(first_cipher_suite)
+                accepted_cipher_suites = [first_cipher_suite]
+                result.cipher_suites_per_protocol[protocol.name] = accepted_cipher_suites
                 # Divide remaining cipher suites in groups and enumerate them in parallel.
                 # Use % to distribute "desirable" cipher suites evenly.
                 n_groups = min(max_workers, MAX_WORKERS_PER_PROTOCOL)
                 groups = [[suite for i, suite in enumerate(all_cipher_suites) if i % n_groups == j and suite != first_cipher_suite] for j in range(n_groups)]
-                for cipher_suites in groups:
-                    add_task(do_enumeration, (protocol, cipher_suites))
-            def do_enumeration(protocol: Protocol, cipher_suites: Sequence[CipherSuite]):
-                accepted_cipher_suites = enumerate_server_cipher_suites(dataclasses.replace(hello_prefs, cipher_suites=cipher_suites, protocols=[protocol]))
-                protocol_results[protocol.name].extend(accepted_cipher_suites)
+                for cipher_suite_group in groups:
+                    prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=cipher_suite_group)
+                    add_task(lambda prefs=prefs: accepted_cipher_suites.extend(enumerate_server_cipher_suites(prefs)))
 
             for protocol in protocols:
                 add_task(start_enumeration, (protocol,))
