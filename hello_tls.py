@@ -447,7 +447,7 @@ class Certificate:
     def key_usage(self):
         return self.extensions.get('keyUsage', '').split(', ') + self.extensions.get('extendedKeyUsage', '').split(', ')
     
-def get_server_certificate_chain(server_name: str, port: int = 443, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[Certificate]:
+def get_server_certificate_chain(server_host: str, port: int = 443, server_name_indication: str | None = None, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[Certificate]:
     """
     Use socket and pyOpenSSL to get the server certificate chain.
     """
@@ -466,11 +466,11 @@ def get_server_certificate_chain(server_name: str, port: int = 443, timeout_in_s
         # https://github.com/pyca/pyopenssl/issues/168#issuecomment-289194607
         connection = SSL.Connection(SSL.Context(SSL.TLS_CLIENT_METHOD), sock)
         connection.settimeout(timeout_in_seconds)
-        connection.connect((server_name, port))
+        connection.connect((server_host, port))
         connection.setblocking(True)
         
         # Necessary for servers that expect SNI. Otherwise expect "tlsv1 alert internal error".
-        connection.set_tlsext_host_name(server_name.encode('utf-8'))
+        connection.set_tlsext_host_name((server_name_indication or server_host).encode('utf-8'))
         connection.do_handshake()
         connection.shutdown()
 
@@ -510,6 +510,7 @@ def scan_server(
     protocols: Sequence[Protocol] = tuple(Protocol),
     enumerate_cipher_suites: bool = True,
     fetch_cert_chain: bool = True,
+    server_name_indication: str | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
     timeout_in_seconds: float | None = DEFAULT_TIMEOUT
     ) -> ServerScanResult:
@@ -522,7 +523,7 @@ def scan_server(
     """
     host, port = parse_target(target, default_port=443)
 
-    hello_prefs = TlsHelloSettings(host, port, timeout_in_seconds, protocols=protocols)
+    hello_prefs = TlsHelloSettings(host, port, timeout_in_seconds, server_name_indication=server_name_indication, protocols=protocols)
 
     result = ServerScanResult(
         host=host,
@@ -536,7 +537,7 @@ def scan_server(
         if fetch_cert_chain:
             add_task(lambda: result.__setattr__(
                 'certificate_chain',
-                get_server_certificate_chain(host, port, timeout_in_seconds)
+                get_server_certificate_chain(host, port, server_name_indication, timeout_in_seconds)
             ))
 
         if enumerate_cipher_suites:
@@ -570,6 +571,7 @@ if __name__ == '__main__':
     parser.add_argument("target", help="server to scan, in the form of 'example.com', 'example.com:443', or even a full URL")
     parser.add_argument("--timeout", "-t", dest="timeout_in_seconds", type=float, default=DEFAULT_TIMEOUT, help=f"socket timeout in seconds")
     parser.add_argument("--max-workers", "-w", type=int, default=DEFAULT_MAX_WORKERS, help=f"maximum number of threads/concurrent connections to use for scanning")
+    parser.add_argument("--server-name-indication", "-s", default=None, help=f"value to be used in the SNI extension, defaults to the target host")
     parser.add_argument("--certs", "-c", dest='fetch_cert_chain', default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
     parser.add_argument("--enumerate-cipher-suites", "-e", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites for each protocol")
     parser.add_argument("--protocol", "-p", action='append', dest='protocols', type=Protocol.__getitem__, default=list(Protocol), choices=[p.name for p in Protocol], help="specify a TLS protocol to be tested, can be used multiple times")
