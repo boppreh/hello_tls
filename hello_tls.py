@@ -1,7 +1,7 @@
 from multiprocessing.pool import ThreadPool
 from urllib.parse import urlparse
 from datetime import datetime
-from dataclasses import dataclass
+import dataclasses
 from enum import Enum
 from typing import Sequence, Tuple
 import socket
@@ -9,13 +9,36 @@ import struct
 
 # Default socket connection timeout, in seconds.
 DEFAULT_TIMEOUT: float = 2
+# Default number of workers/threads/concurrent connectiosn to use.
+DEFAULT_MAX_WORKERS: int = 6
 
 class Protocol(Enum):
-    SSLv3 = b"\x03\x00"
-    TLS_1_0 = b"\x03\x01"
-    TLS_1_1 = b"\x03\x02"
-    TLS_1_2 = b"\x03\x03"
+    # Keep protocols in order of preference.
     TLS_1_3 = b"\x03\x04"
+    TLS_1_2 = b"\x03\x03"
+    TLS_1_1 = b"\x03\x02"
+    TLS_1_0 = b"\x03\x01"
+    SSLv3 = b"\x03\x00"
+
+class RecordType(Enum):
+    INVALID = 0 # Unused in this script.
+    CHANGE_CIPHER_SPEC = 20 # Unused in this script.
+    ALERT = 21
+    HANDSHAKE = 22
+    APPLICATION_DATA = 23 # Unused in this script.
+
+class HandshakeType(Enum):
+    client_hello = 1
+    server_hello = 2
+    new_session_ticket = 4
+    end_of_early_data = 5
+    encrypted_extensions = 8
+    certificate = 11
+    certificate_request = 13
+    certificate_verify = 15
+    finished = 20
+    key_update = 24
+    message_hash = 25
 
 class CipherSuite(Enum):
     # TLS 1.3 cipher suites.
@@ -144,224 +167,259 @@ class AlertDescription(Enum):
     certificate_required = 116
     no_application_protocol = 120
 
-class ServerError(Exception):
-    def __init__(self, protocol: Protocol, level: AlertLevel, alert: AlertDescription):
-        super().__init__(self, f'Server error ({protocol}): {level}: {alert}')
-        self.protocol = protocol
+class ServerAlertError(Exception):
+    def __init__(self, level: AlertLevel, description: AlertDescription):
+        super().__init__(self, f'Server error: {level}: {description}')
         self.level = level
-        self.alert = alert
+        self.description = description
 
-@dataclass
+@dataclasses.dataclass
 class ServerHello:
-    protocol: Protocol
+    # TODO: parse more accurate protocol version by reading the TLS 1.3 extension.
+    legacy_record_protocol: Protocol
+    legacy_server_protocol: Protocol
     cipher_suite: CipherSuite
 
-    @staticmethod
-    def from_packet(packet: bytes):
-        """
-        Parses a Server Hello packet and returns the cipher suite accepted by the server.
-        """
-        if not packet:
-            raise ValueError('Empty response')
-        if packet[0] == 0x15:
-            # Alert record
-            record_type, legacy_record_version, length = struct.unpack('!B2sH', packet[:5])
-            assert record_type == 0x15
-            alert_level_id, alert_description_id = struct.unpack('!BB', packet[5:7])
-            raise ServerError(Protocol(legacy_record_version), AlertLevel(alert_level_id), AlertDescription(alert_description_id))
-        
-        assert packet[0] == 0x16
-        
-        begin_format = "!BHHB3s2s32sB"
-        begin_length = struct.calcsize(begin_format)
-        begin_packet = packet[:begin_length]
-        (
-            record_type,
-            legacy_record_version,
-            handshake_length,
-            handshake_type,
-            server_hello_length,
-            server_version,
-            server_random,
-            session_id_length,
-        ) = struct.unpack(begin_format, begin_packet)
-
-        assert record_type == 0x16
-        assert legacy_record_version in [0x0301, 0x0302, 0x0303]
-        assert handshake_type == 0x02
-        assert session_id_length in [0, 0x20]
-
-        cipher_suite_start = begin_length+session_id_length
-        cipher_suite_id = packet[cipher_suite_start:cipher_suite_start+2]
-        # TODO: protocol is wrong for TLS 1.3 because it appears as an extension.
-        return ServerHello(Protocol(server_version), CipherSuite(cipher_suite_id))
-
-def _prefix_length(b: bytes, width_bytes: int = 2) -> bytes:
+def try_parse_server_error(packet: bytes) -> ServerAlertError | None:
     """
-    Returns `b` prefixed with its length, encoded as a big-endian integer of `width_bytes` bytes.
+    Parses a server alert packet, or None if the packet is not an alert.
     """
-    return len(b).to_bytes(width_bytes, byteorder="big") + b
-def _get_client_hello_version(allowed_protocols: Sequence[Protocol]) -> bytes:
-    versions = [protocol.value for protocol in allowed_protocols]
-    return min(Protocol.TLS_1_2.value, max(versions))
-def _get_record_version(allowed_protocols: Sequence[Protocol]) -> bytes:
-    # Record version cannot be higher than TLS 1.0 due to ossification.
-    return max(Protocol.TLS_1_0.value, _get_client_hello_version(allowed_protocols))
+    # Alert record
+    if packet[0] != RecordType.ALERT.value:
+        return None
+    record_type_int, legacy_record_version, length = struct.unpack('!B2sH', packet[:5])
+    alert_level_id, alert_description_id = struct.unpack('!BB', packet[5:7])
+    return ServerAlertError(AlertLevel(alert_level_id), AlertDescription(alert_description_id))
 
-@dataclass
-class ClientHello:
-    server_name: str
-    allowed_protocols: Sequence[Protocol] = tuple(Protocol)
-    allowed_cipher_suites: Sequence[CipherSuite] = tuple(CipherSuite)
+def parse_server_hello(packet: bytes) -> ServerHello:
+    """
+    Parses a Server Hello packet and returns the cipher suite accepted by the server.
+    """
+    record_type = RecordType(packet[0])
 
-    def make_packet(self) -> bytes:
-        """
-        Generates a Client Hello packet for the given server name and settings.
-        """
-        return bytes((
-            0x16, # Record type: handshake.
-            *_get_record_version(self.allowed_protocols), # Legacy record version: max TLS 1.0.
-            *_prefix_length(bytes([ # Handshake record.
-                0x01,  # Handshake type: Client Hello.
-                *_prefix_length(width_bytes=3, b=bytes([ # Client hello handshake.
-                    *_get_client_hello_version(self.allowed_protocols),  # Legacy client version: max TLS 1.2.
-                    *32*[0x07],  # Random. Any value will do.
-                    32,  # Legacy session ID length.
-                    *32*[0x07],  # Legacy session ID. Any value will do.
-                    *_prefix_length( # Cipher suites.
-                        b"".join(cipher_suite.value for cipher_suite in self.allowed_cipher_suites)
+    if not packet:
+        raise ValueError('Empty response')
+    
+    if error := try_parse_server_error(packet):
+        raise error
+    
+    assert record_type == RecordType.HANDSHAKE
+    
+    begin_format = "!B2sHB3s2s32sB"
+    begin_length = struct.calcsize(begin_format)
+    begin_packet = packet[:begin_length]
+    (
+        record_type,
+        legacy_record_version,
+        handshake_length,
+        handshake_type_int,
+        server_hello_length,
+        server_version,
+        server_random,
+        session_id_length,
+    ) = struct.unpack(begin_format, begin_packet)
+
+    assert HandshakeType(handshake_type_int) == HandshakeType.server_hello
+
+    cipher_suite_start = begin_length+session_id_length
+    cipher_suite_id = bytes(packet[cipher_suite_start:cipher_suite_start+2])
+    return ServerHello(Protocol(legacy_record_version), Protocol(server_version), CipherSuite(cipher_suite_id))
+
+@dataclasses.dataclass
+class TlsHelloSettings:
+    """
+    Settings necessary to send a TLS Client Hello to a server.
+    By default, all protocols and cipher suites are (claimed to be) supported.
+    """
+    server_host: str
+    server_port: int = 443
+    timeout_in_seconds: float | None = DEFAULT_TIMEOUT
+
+    server_name_indication: str | None = None # Defaults to server_host if not provided.
+    protocols: Sequence[Protocol] = tuple(Protocol)
+    cipher_suites: Sequence[CipherSuite] = tuple(CipherSuite)
+
+def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
+    """
+    Creates a TLS Record byte string with Client Hello handshake based on client preferences.
+    """
+    def _prefix_length(b: bytes, width_bytes: int = 2) -> bytes:
+        """ Returns `b` prefixed with its length, encoded as a big-endian integer of `width_bytes` bytes. """
+        return len(b).to_bytes(width_bytes, byteorder="big") + b
+    def _get_client_hello_version(protocols: Sequence[Protocol]) -> bytes:
+        versions = [protocol.value for protocol in protocols]
+        return min(Protocol.TLS_1_2.value, max(versions))
+    def _get_record_version(protocols: Sequence[Protocol]) -> bytes:
+        # Record version cannot be higher than TLS 1.0 due to ossification.
+        return max(Protocol.TLS_1_0.value, _get_client_hello_version(protocols))
+
+    return bytes((
+        0x16, # Record type: handshake.
+        *_get_record_version(hello_prefs.protocols), # Legacy record version: max TLS 1.0.
+        *_prefix_length(bytes([ # Handshake record.
+            0x01,  # Handshake type: Client Hello.
+            *_prefix_length(width_bytes=3, b=bytes([ # Client hello handshake.
+                *_get_client_hello_version(hello_prefs.protocols),  # Legacy client version: max TLS 1.2.
+                *32*[0x07],  # Random. Any value will do.
+                32,  # Legacy session ID length.
+                *32*[0x07],  # Legacy session ID. Any value will do.
+                *_prefix_length( # Cipher suites.
+                    b"".join(cipher_suite.value for cipher_suite in hello_prefs.cipher_suites)
+                ),
+                0x01,  # Legacy compression methods length.
+                0x00,  # Legacy compression method: null.
+                
+                *_prefix_length(bytes([ # Extensions.
+                    0x00, 0x00,  # Extension type: server_name.
+                    *_prefix_length( # Extension data.
+                        _prefix_length( # server_name list
+                            b'\x00' + # Name type: host_name.
+                            _prefix_length((
+                                hello_prefs.server_name_indication or hello_prefs.server_host
+                            ).encode('ascii'))
+                        )
                     ),
-                    0x01,  # Legacy compression methods length.
-                    0x00,  # Legacy compression method: null.
+
+                    0x00, 0x05, # Extension type: status_request. Allow server to send OCSP information.
+                    0x00, 0x05, # Length of extension data.
+                    0x01, # Certificate status type: OCSP.
+                    0x00, 0x00, # Responder ID list length.
+                    0x00, 0x00, # Request extension information length.
+
+                    0x00, 0x0b,  # Extension type: EC point formats.
+                    0x00, 0x04,  # Length of extension data.
+                    0x03,  # Length of EC point formats list.
+                    0x00,  # EC point format: uncompressed.
+                    0x01,  # EC point format: ansiX962_compressed_prime.
+                    0x02,  # EC point format: ansiX962_compressed_char2.
+
+                    0x00, 0x0a,  # Extension type: supported groups (mostly EC curves).
+                    *_prefix_length( # Extension data.
+                        _prefix_length(bytes([ # Supported groups list.
+                            0x00, 0x1d, # Curve "x25519".
+                            0x00, 0x17, # Curve "secp256r1".
+                            0x00, 0x1e, # Curve "x448".
+                            0x00, 0x18, # Curve "secp384r1".
+                            0x00, 0x19, # Curve "secp521r1".
+                            0x01, 0x00, # Curve "ffdhe2048".
+                            0x01, 0x01, # Curve "ffdhe3072".
+                            0x01, 0x02, # Curve "ffdhe4096".
+                            0x01, 0x03, # Curve "ffdhe6144".
+                            0x01, 0x04, # Curve "ffdhe8192".
+                        ]))
+                    ),
+
+                    0x00, 0x23,  # Extension type: session ticket.
+                    0x00, 0x00,  # No session ticket data follows.
+
+                    0x00, 0x16,  # Extension type: encrypt-then-MAC.
+                    0x00, 0x00,  # Length of extension data.
+
+                    0x00, 0x17,  # Extension type: extended master secret.
+                    0x00, 0x00,  # No extension data follows.
+
+                    0x00, 0x0d,  # Extension type: signature algorithms.
+                    *_prefix_length( # Extension data.
+                        _prefix_length(bytes([ # Signature algorithm list.
+                            0x04, 0x03, # ECDSA-SECP256r1-SHA256
+                            0x05, 0x03, # ECDSA-SECP384r1-SHA384
+                            0x06, 0x03, # ECDSA-SECP521r1-SHA512
+                            0x08, 0x07, # ED25519
+                            0x08, 0x08, # ED448
+                            0x08, 0x09, # RSA-PSS-PSS-SHA256
+                            0x08, 0x0a, # RSA-PSS-PSS-SHA384
+                            0x08, 0x0b, # RSA-PSS-PSS-SHA512
+                            0x08, 0x04, # RSA-PSS-RSAE-SHA256
+                            0x08, 0x05, # RSA-PSS-RSAE-SHA384
+                            0x08, 0x06, # RSA-PSS-RSAE-SHA512
+                            0x04, 0x01, # RSA-PKCS1-SHA256
+                            0x05, 0x01, # RSA-PKCS1-SHA384
+                            0x06, 0x01, # RSA-PKCS1-SHA512
+                            0x02, 0x01, # RSA-PKCS1-SHA1
+                            0x02, 0x03, # ECDSA-SHA1
+                        ]))
+                    ),
+
+                    0xff, 0x01, # Extension type: renegotiation_info (TLS 1.2 or lower).
+                    0x00, 0x01, # Length of extension data.
+                    0x00, # Renegotiation info length.
+
+                    0x00, 0x12, # Extension type: SCT. Allow server to return signed certificate timestamp.
+                    0x00, 0x00, # Length of extension data.
+
+                    *((Protocol.TLS_1_3 in hello_prefs.protocols) * [ # This extension is only available in TLS 1.3.
+                        0x00, 0x2b,  # Extension type: supported version.
+                        *_prefix_length(
+                            _prefix_length(
+                                b"".join(protocol.value for protocol in hello_prefs.protocols),
+                                width_bytes=1
+                            )
+                        )
+                    ]),
+
+                    # TODO: PSK key exchange modes extension.
+                    0x00, 0x2d, 0x00, 0x02, 0x01, 0x01,
                     
-                    *_prefix_length(bytes([ # Extensions.
-                        0x00, 0x00,  # Extension type: server_name.
-                        *_prefix_length( # Extension data.
-                            _prefix_length( # server_name list
-                                b'\x00' + # Name type: host_name.
-                                _prefix_length(self.server_name.encode('ascii'))
-                            )
-                        ),
-
-                        0x00, 0x05, # Extension type: status_request. Allow server to send OCSP information.
-                        0x00, 0x05, # Length of extension data.
-                        0x01, # Certificate status type: OCSP.
-                        0x00, 0x00, # Responder ID list length.
-                        0x00, 0x00, # Request extension information length.
-
-                        0x00, 0x0b,  # Extension type: EC point formats.
-                        0x00, 0x04,  # Length of extension data.
-                        0x03,  # Length of EC point formats list.
-                        0x00,  # EC point format: uncompressed.
-                        0x01,  # EC point format: ansiX962_compressed_prime.
-                        0x02,  # EC point format: ansiX962_compressed_char2.
-
-                        0x00, 0x0a,  # Extension type: supported groups (mostly EC curves).
-                        *_prefix_length( # Extension data.
-                            _prefix_length(bytes([ # Supported groups list.
-                                0x00, 0x1d, # Curve "x25519".
-                                0x00, 0x17, # Curve "secp256r1".
-                                0x00, 0x1e, # Curve "x448".
-                                0x00, 0x18, # Curve "secp384r1".
-                                0x00, 0x19, # Curve "secp521r1".
-                                0x01, 0x00, # Curve "ffdhe2048".
-                                0x01, 0x01, # Curve "ffdhe3072".
-                                0x01, 0x02, # Curve "ffdhe4096".
-                                0x01, 0x03, # Curve "ffdhe6144".
-                                0x01, 0x04, # Curve "ffdhe8192".
-                            ]))
-                        ),
-
-                        0x00, 0x23,  # Extension type: session ticket.
-                        0x00, 0x00,  # No session ticket data follows.
-
-                        0x00, 0x16,  # Extension type: encrypt-then-MAC.
-                        0x00, 0x00,  # Length of extension data.
-
-                        0x00, 0x17,  # Extension type: extended master secret.
-                        0x00, 0x00,  # No extension data follows.
-
-                        0x00, 0x0d,  # Extension type: signature algorithms.
-                        *_prefix_length( # Extension data.
-                            _prefix_length(bytes([ # Signature algorithm list.
-                                0x04, 0x03, # ECDSA-SECP256r1-SHA256
-                                0x05, 0x03, # ECDSA-SECP384r1-SHA384
-                                0x06, 0x03, # ECDSA-SECP521r1-SHA512
-                                0x08, 0x07, # ED25519
-                                0x08, 0x08, # ED448
-                                0x08, 0x09, # RSA-PSS-PSS-SHA256
-                                0x08, 0x0a, # RSA-PSS-PSS-SHA384
-                                0x08, 0x0b, # RSA-PSS-PSS-SHA512
-                                0x08, 0x04, # RSA-PSS-RSAE-SHA256
-                                0x08, 0x05, # RSA-PSS-RSAE-SHA384
-                                0x08, 0x06, # RSA-PSS-RSAE-SHA512
-                                0x04, 0x01, # RSA-PKCS1-SHA256
-                                0x05, 0x01, # RSA-PKCS1-SHA384
-                                0x06, 0x01, # RSA-PKCS1-SHA512
-                                0x02, 0x01, # RSA-PKCS1-SHA1
-                                0x02, 0x03, # ECDSA-SHA1
-                            ]))
-                        ),
-
-                        0xff, 0x01, # Extension type: renegotiation_info (TLS 1.2 or lower).
-                        0x00, 0x01, # Length of extension data.
-                        0x00, # Renegotiation info length.
-
-                        0x00, 0x12, # Extension type: SCT. Allow server to return signed certificate timestamp.
-                        0x00, 0x00, # Length of extension data.
-
-                        *((Protocol.TLS_1_3 in self.allowed_protocols) * [ # This extension is only available in TLS 1.3.
-                            0x00, 0x2b,  # Extension type: supported version.
-                            *_prefix_length(
-                                _prefix_length(
-                                    b"".join(protocol.value for protocol in self.allowed_protocols),
-                                    width_bytes=1
-                                )
-                            )
-                        ]),
-
-                        # TODO: PSK key exchange modes extension.
-                        0x00, 0x2d, 0x00, 0x02, 0x01, 0x01,
-                        
-                        # TODO: key share extension.
-                        0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20, 0x35, 0x80, 0x72, 0xd6, 0x36, 0x58, 0x80, 0xd1, 0xae, 0xea, 0x32, 0x9a, 0xdf, 0x91, 0x21, 0x38, 0x38, 0x51, 0xed, 0x21, 0xa2, 0x8e, 0x3b, 0x75, 0xe9, 0x65, 0xd0, 0xd2, 0xcd, 0x16, 0x62, 0x54,
-                    ]))
+                    # TODO: key share extension.
+                    0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20, 0x35, 0x80, 0x72, 0xd6, 0x36, 0x58, 0x80, 0xd1, 0xae, 0xea, 0x32, 0x9a, 0xdf, 0x91, 0x21, 0x38, 0x38, 0x51, 0xed, 0x21, 0xa2, 0x8e, 0x3b, 0x75, 0xe9, 0x65, 0xd0, 0xd2, 0xcd, 0x16, 0x62, 0x54,
                 ]))
             ]))
-        ))
-    
-    def send(self, port: int = 443, server_name: str | None = None, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerHello:
-        """
-        Sends a Client Hello packet to the server and returns the Server Hello packet.
-        By default, sends the packet to the server specified in the constructor.
-        """
-        host = self.server_name if server_name is None else server_name
-        with socket.create_connection((host, port), timeout=timeout_in_seconds) as s:
-            s.send(self.make_packet())
-            return ServerHello.from_packet(s.recv(4096))
+        ]))
+    ))
 
-def enumerate_server_cipher_suites(server_name: str, cipher_suites_to_test: Sequence[CipherSuite], protocol: Protocol = Protocol.TLS_1_3, port: int = 443, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[CipherSuite]:
+def send_hello(hello_prefs: TlsHelloSettings) -> bytes:
+    """
+    Sends a Client Hello packet to the server based on hello_prefs, and returns the first few bytes of the server response.
+    """
+    with socket.create_connection((hello_prefs.server_host, hello_prefs.server_port), timeout=hello_prefs.timeout_in_seconds) as sock:
+        sock.send(make_client_hello(hello_prefs))
+        return sock.recv(512)
+
+def test_server_protocol(hello_prefs: TlsHelloSettings) -> bool:
+    """
+    Attempts to connect to the server using the given protocol, returning True if the server didn't complain about the version.
+    """
+    response = send_hello(hello_prefs)
+    if (error := try_parse_server_error(response)) and error.description == AlertDescription.protocol_version:
+        return False
+    else:
+        # Other issues, like cipher suite mismatch or lack of application data, are not interesting.
+        # If there are any issues that can happen *before* the protocol version is checked, we should add them here.
+        return True
+        
+def get_server_preferred_cipher_suite(hello_prefs: TlsHelloSettings) -> CipherSuite | None:
+    """
+    Attempts to connect to the server and returns the cipher suite picked by the server, if any.
+    Protocol and cipher suite errors are swallowed, returning None, but other errors are raised.
+    """
+    response = send_hello(hello_prefs)
+    if error := try_parse_server_error(response):
+        if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure]:
+            return None
+        else:
+            raise error
+    else:
+        return parse_server_hello(response).cipher_suite
+
+def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[CipherSuite]:
     """
     Given a list of cipher suites to test, sends a sequence of Client Hello packets to the server,
     removing the accepted cipher suite from the list each time.
     Returns a list of all cipher suites the server accepted.
     """
-    cipher_suites_to_test = list(cipher_suites_to_test)
+    cipher_suites_to_test = list(hello_prefs.cipher_suites)
     accepted_cipher_suites = []
     while cipher_suites_to_test:
-        client_hello = ClientHello(server_name, allowed_protocols=[protocol], allowed_cipher_suites=cipher_suites_to_test)
-        try:
-            server_hello = client_hello.send(port=port, timeout_in_seconds=timeout_in_seconds)
-        except ServerError as e:
-            if e.alert == AlertDescription.handshake_failure:
-                break
-            else:
-                raise e
-        accepted_cipher_suites.append(server_hello.cipher_suite)
-        cipher_suites_to_test.remove(server_hello.cipher_suite)
+        hello_prefs = dataclasses.replace(hello_prefs, cipher_suites=cipher_suites_to_test)
+        cipher_suite_picked = get_server_preferred_cipher_suite(hello_prefs)
+        if cipher_suite_picked:
+            accepted_cipher_suites.append(cipher_suite_picked)
+            cipher_suites_to_test.remove(cipher_suite_picked)
+        else:
+            break
     return accepted_cipher_suites
 
-@dataclass
+@dataclasses.dataclass
 class Certificate:
     """
     Represents an X509 certificate in a chain sent by the server.
@@ -386,7 +444,7 @@ class Certificate:
     def key_usage(self):
         return self.extensions.get('keyUsage', '').split(', ') + self.extensions.get('extendedKeyUsage', '').split(', ')
     
-def get_server_certificate_chain(server_name:str, port: int = 443, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[Certificate]:
+def get_server_certificate_chain(server_name: str, port: int = 443, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> Sequence[Certificate]:
     """
     Use socket and pyOpenSSL to get the server certificate chain.
     """
@@ -436,16 +494,14 @@ def get_server_certificate_chain(server_name:str, port: int = 443, timeout_in_se
         ))
     return nice_certs
 
-@dataclass
+@dataclasses.dataclass
 class ServerScanResult:
-    server_name: str
+    host: str
     port: int
-    protocol_support: dict[str, bool]
-    cipher_suites_tls_1_2: list[CipherSuite]
-    cipher_suites_tls_1_3: list[CipherSuite]
+    cipher_suites_per_protocol: dict[str, Sequence[CipherSuite] | None]
     certificate_chain: list[Certificate]
 
-def scan_server(server_name: str, port: int = 443, fetch_certificate_chain: bool = True, max_workers: int = 5, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerScanResult:
+def scan_server(target: str, port: int = 443, fetch_cert_chain: bool = True, max_workers: int = DEFAULT_MAX_WORKERS, timeout_in_seconds: float | None = DEFAULT_TIMEOUT) -> ServerScanResult:
     """
     Scans a SSL/TLS server for supported protocols, cipher suites, and certificate chain.
 
@@ -453,77 +509,58 @@ def scan_server(server_name: str, port: int = 443, fetch_certificate_chain: bool
 
     Runs scans in parallel to speed up the process, with up to `max_workers` threads connecting at the same time.
     """
+    host, port = parse_target(target, default_port=443)
+
+    hello_prefs = TlsHelloSettings(host, port, timeout_in_seconds)
+
     result = ServerScanResult(
-        server_name=server_name,
+        host=host,
         port=port,
         certificate_chain=[],
-        protocol_support={p.name: False for p in Protocol},
-        cipher_suites_tls_1_2=[],
-        cipher_suites_tls_1_3=[]
+        cipher_suites_per_protocol={p.name: None for p in Protocol}
     )
 
-    def check_protocol_support(protocol: Protocol) -> None:
-        try:
-            ClientHello(server_name, allowed_protocols=[protocol]).send(port=port, timeout_in_seconds=timeout_in_seconds)
-            result.protocol_support[protocol.name] = True
-        except ServerError as e:
-            result.protocol_support[protocol.name] = False
-
+    tasks = []
     with ThreadPool(max_workers) as pool:
-        if fetch_certificate_chain:
-            pool.apply_async(lambda: result.certificate_chain.extend(
-                get_server_certificate_chain(server_name, port, timeout_in_seconds))
-            )
+        add_task = lambda f: tasks.append(pool.apply_async(f))
 
-        # How many workers to use for scanning cipher suites, per protocol.
-        n_cipher_suite_scanners = max(1, max_workers//3)
-        # Split list of cipher suites into `n_cipher_suite_scanners` chunks. Use % to distribute "more desirable" cipher suites evenly.
-        cipher_suite_chunks = [[c for i, c in enumerate(CipherSuite) if i % n_cipher_suite_scanners == n] for n in range(n_cipher_suite_scanners)]
-        for cipher_suites_to_test in cipher_suite_chunks:
-            # Scan TLS 1.2 and TLS 1.3 separately because the cipher suites are different.
-            pool.apply_async(
-                enumerate_server_cipher_suites,
-                (server_name, cipher_suites_to_test, Protocol.TLS_1_2, port, timeout_in_seconds),
-                callback=result.cipher_suites_tls_1_2.extend
-            )
-            pool.apply_async(
-                enumerate_server_cipher_suites,
-                (server_name, cipher_suites_to_test, Protocol.TLS_1_3, port, timeout_in_seconds),
-                callback=result.cipher_suites_tls_1_3.extend
-            )
+        if fetch_cert_chain:
+            add_task(lambda: result.certificate_chain.extend(
+                get_server_certificate_chain(host, port, timeout_in_seconds)
+            ))
 
-        for other_protocol in [Protocol.SSLv3, Protocol.TLS_1_0, Protocol.TLS_1_1]:
-            pool.apply_async(
-                check_protocol_support,
-                (other_protocol,)
-            )
+        for protocol in Protocol:
+            add_task(lambda protocol=protocol: result.cipher_suites_per_protocol.update({
+                protocol.name: enumerate_server_cipher_suites(dataclasses.replace(hello_prefs, protocols=[protocol]))
+            }))
 
-        # Join all tasks to ensure they finish before returning.
-        pool.close()
-        pool.join()
-
-    # Add higher protocol version support based on cipher suites found.
-    result.protocol_support[Protocol.TLS_1_2.name] = len(result.cipher_suites_tls_1_2) > 0
-    result.protocol_support[Protocol.TLS_1_3.name] = len(result.cipher_suites_tls_1_3) > 0
+        # Join all tasks, waiting for them to finish in any order.
+        # pool.close() + pool.join() perform a similar job, but discard task errors.
+        for task in tasks:
+            task.get()
 
     return result
 
-def parse_target(target: str) -> Tuple[str, int]:
+def parse_target(target: str, default_port: int = 443) -> Tuple[str, int]:
     if not '//' in target:
         # Without a scheme, urlparse will treat the target as a path.
         # Prefix // to make it a netloc.
         target = '//' + target
     url = urlparse(target, scheme='https')
-    return url.netloc, url.port if url.port and url.scheme != 'http' else 443
+    return url.netloc, url.port if url.port and url.scheme != 'http' else default_port
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("target", help="Server to scan, in the form of 'example.com' or 'example.com:443'.")
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("target", help="server to scan, in the form of 'example.com', 'example.com:443', or even a full URL")
+    parser.add_argument("--timeout", "-t", dest="timeout_in_seconds", type=float, default=DEFAULT_TIMEOUT, help=f"socket timeout in seconds")
+    parser.add_argument("--max-workers", "-w", type=int, default=DEFAULT_MAX_WORKERS, help=f"maximum number of threads/concurrent connections to use for scanning")
+    parser.add_argument("--certs", "-c", dest='fetch_cert_chain', default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
     args = parser.parse_args()
-    server_name, port = parse_target(args.target)
 
-    import json, dataclasses
+    results = scan_server(**args.__dict__)
+
+    import sys, json, dataclasses
     class EnhancedJSONEncoder(json.JSONEncoder):
         """ Converts non-primitive objects to JSON """
         def default(self, o):
@@ -534,4 +571,4 @@ if __name__ == '__main__':
             elif isinstance(o, datetime):
                 return o.isoformat()
             return super().default(o)
-    print(json.dumps(scan_server(server_name, port=port, max_workers=6), indent=2, cls=EnhancedJSONEncoder))
+    json.dump(results, sys.stdout, indent=2, cls=EnhancedJSONEncoder)
