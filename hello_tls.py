@@ -265,9 +265,10 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
         return len(b).to_bytes(width_bytes, byteorder="big") + b
     
     protocol_values = [protocol.value for protocol in hello_prefs.protocols]
+    max_protocol = max(protocol_values)
     # Record and Hanshake versions have a maximum value due to ossification.
-    legacy_handshake_version = min(Protocol.TLS1_2.value, max(protocol_values))
-    legacy_record_version = min(Protocol.TLS1_0.value, legacy_handshake_version)
+    legacy_handshake_version = min(Protocol.TLS1_2.value, max_protocol)
+    legacy_record_version = min(Protocol.TLS1_0.value, max_protocol)
 
     return bytes((
         0x16, # Record type: handshake.
@@ -414,8 +415,18 @@ def get_server_preferred_cipher_suite(hello_prefs: TlsHelloSettings) -> CipherSu
             return None
         else:
             raise error
-    else:
-        return parse_server_hello(response).cipher_suite
+    
+    server_hello = parse_server_hello(response)
+    is_protocol_expected = (
+        server_hello.legacy_server_protocol in hello_prefs.protocols
+        # Server version is always <=TLS 1.2 for compatibility reasons, it might actually be TLS 1.3.
+        or server_hello.cipher_suite in TLS1_3_CIPHER_SUITES and Protocol.TLS1_3 in hello_prefs.protocols
+    )
+    if not is_protocol_expected:
+        # Server picked a protocol we didn't ask for.
+        return None
+    
+    return server_hello.cipher_suite
 
 def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[CipherSuite]:
     """
