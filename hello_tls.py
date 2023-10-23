@@ -249,20 +249,19 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
     def _prefix_length(b: bytes, width_bytes: int = 2) -> bytes:
         """ Returns `b` prefixed with its length, encoded as a big-endian integer of `width_bytes` bytes. """
         return len(b).to_bytes(width_bytes, byteorder="big") + b
-    def _get_client_hello_version(protocols: Sequence[Protocol]) -> bytes:
-        versions = [protocol.value for protocol in protocols]
-        return min(Protocol.TLS1_2.value, max(versions))
-    def _get_record_version(protocols: Sequence[Protocol]) -> bytes:
-        # Record version cannot be higher than TLS 1.0 due to ossification.
-        return max(Protocol.TLS1_0.value, _get_client_hello_version(protocols))
+    
+    protocol_values = [protocol.value for protocol in hello_prefs.protocols]
+    # Record and Hanshake versions have a maximum value due to ossification.
+    legacy_handshake_version = min(Protocol.TLS1_2.value, max(protocol_values))
+    legacy_record_version = min(Protocol.TLS1_0.value, legacy_handshake_version)
 
     return bytes((
         0x16, # Record type: handshake.
-        *_get_record_version(hello_prefs.protocols), # Legacy record version: max TLS 1.0.
+        *legacy_record_version, # Legacy record version: max TLS 1.0.
         *_prefix_length(bytes([ # Handshake record.
             0x01,  # Handshake type: Client Hello.
             *_prefix_length(width_bytes=3, b=bytes([ # Client hello handshake.
-                *_get_client_hello_version(hello_prefs.protocols),  # Legacy client version: max TLS 1.2.
+                *legacy_handshake_version,  # Legacy client version: max TLS 1.2.
                 *32*[0x07],  # Random. Any value will do.
                 32,  # Legacy session ID length.
                 *32*[0x07],  # Legacy session ID. Any value will do.
