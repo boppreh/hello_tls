@@ -1,9 +1,8 @@
 from multiprocessing.pool import ThreadPool
-from urllib.parse import urlparse
 from datetime import datetime
 import dataclasses
 from enum import Enum
-from typing import Sequence, Tuple
+from typing import Sequence
 import socket
 import struct
 
@@ -450,6 +449,9 @@ def get_server_certificate_chain(server_host: str, port: int = 443, server_name_
     """
     Use socket and pyOpenSSL to get the server certificate chain.
     """
+    assert ':' not in server_host
+    assert '/' not in server_host
+
     from OpenSSL import SSL, crypto
 
     def _x509_name_to_dict(x509_name: crypto.X509Name) -> dict[str, str]:
@@ -504,7 +506,7 @@ class ServerScanResult:
     certificate_chain: list[Certificate] | None = None
 
 def scan_server(
-    target: str,
+    host: str,
     port: int = 443,
     protocols: Sequence[Protocol] = tuple(Protocol),
     enumerate_cipher_suites: bool = True,
@@ -520,8 +522,6 @@ def scan_server(
 
     Runs scans in parallel to speed up the process, with up to `max_workers` threads connecting at the same time.
     """
-    host, port = parse_target(target, default_port=443)
-
     hello_prefs = TlsHelloSettings(host, port, timeout_in_seconds, server_name_indication=server_name_indication, protocols=protocols)
 
     result = ServerScanResult(
@@ -556,22 +556,14 @@ def scan_server(
 
     return result
 
-def parse_target(target: str, default_port: int = 443) -> Tuple[str, int]:
-    if not '//' in target:
-        # Without a scheme, urlparse will treat the target as a path.
-        # Prefix // to make it a netloc.
-        target = '//' + target
-    url = urlparse(target, scheme='https')
-    return url.netloc, url.port if url.port and url.scheme != 'http' else default_port
-
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("target", help="server to scan, in the form of 'example.com', 'example.com:443', or even a full URL")
-    parser.add_argument("--timeout", "-t", dest="timeout_in_seconds", type=float, default=DEFAULT_TIMEOUT, help=f"socket timeout in seconds")
+    parser.add_argument("--timeout", "-t", dest="timeout", type=float, default=DEFAULT_TIMEOUT, help=f"socket connection timeout in seconds")
     parser.add_argument("--max-workers", "-w", type=int, default=DEFAULT_MAX_WORKERS, help=f"maximum number of threads/concurrent connections to use for scanning")
     parser.add_argument("--server-name-indication", "-s", default='', help=f"value to be used in the SNI extension, defaults to the target host")
-    parser.add_argument("--certs", "-c", dest='fetch_cert_chain', default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
+    parser.add_argument("--certs", "-c", default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
     parser.add_argument("--enumerate-cipher-suites", "-e", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites for each protocol")
     def validate_protocol_flag(value):
         try:
@@ -583,11 +575,28 @@ if __name__ == '__main__':
     parser.add_argument("--protocols", "-p", dest='protocols_str', type=validate_protocol_flag, default=','.join(p.name for p in Protocol), help="comma separated list of TLS/SSL protocols to test")
     args = parser.parse_args()
     
-    kwargs = args.__dict__
-    kwargs['protocols'] = [Protocol[p] for p in args.protocols_str.split(',')]
-    del kwargs['protocols_str']
+    protocols = [Protocol[p] for p in args.protocols_str.split(',')]
 
-    results = scan_server(**kwargs)
+    from urllib.parse import urlparse
+    if not '//' in args.target:
+        # Without a scheme, urlparse will treat the target as a path.
+        # Prefix // to make it a netloc.
+        url = urlparse('//' + args.target)
+    else:
+        url = urlparse(args.target, scheme='https')
+    host = url.hostname or 'localhost'
+    port = url.port if url.port and url.scheme != 'http' else 443
+
+    results = scan_server(
+        host,
+        port=port,
+        protocols=protocols,
+        enumerate_cipher_suites=args.enumerate_cipher_suites,
+        fetch_cert_chain=args.certs,
+        server_name_indication=args.server_name_indication,
+        max_workers=args.max_workers,
+        timeout_in_seconds=args.timeout,
+    )
 
     import sys, json, dataclasses
     class EnhancedJSONEncoder(json.JSONEncoder):
