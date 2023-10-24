@@ -62,6 +62,8 @@ class CipherSuite(Enum):
         if self.__class__ != other.__class__:
             return NotImplemented
         return self.value < other.value
+    def __repr__(self):
+        return self.name
     
     # For compability.
     TLS_EMPTY_RENEGOTIATION_INFO_SCSV = b"\x00\xff"
@@ -467,6 +469,8 @@ class Certificate:
     serial_number: int
     subject: dict[str, str]
     issuer: dict[str, str]
+    key_type: str
+    key_length_in_bits: int
     not_before: datetime
     not_after: datetime
     signature_algorithm: str
@@ -529,6 +533,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
     
     logger.info(f"Received {len(raw_certs)} certificates")
     
+    public_key_type_by_id = {crypto.TYPE_DH: 'DH', crypto.TYPE_DSA: 'DSA', crypto.TYPE_EC: 'EC', crypto.TYPE_RSA: 'RSA'}
     nice_certs: list[Certificate] = []
     for raw_cert in raw_certs:
         extensions: dict[str, str] = {}
@@ -544,6 +549,8 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
             not_after=_x509_time_to_datetime(raw_cert.get_notAfter()),
             signature_algorithm=raw_cert.get_signature_algorithm().decode('utf-8'),
             extensions=extensions,
+            key_length_in_bits=raw_cert.get_pubkey().bits(),
+            key_type=public_key_type_by_id.get(raw_cert.get_pubkey().type(), 'UNKNOWN'),
         ))
     return nice_certs
 
