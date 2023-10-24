@@ -6,6 +6,25 @@ Its purpose is to quickly discover what cipher suites and SSL/TLS protocols are 
 
 There's no actual cryptography, just sending a stream of bytes and seeing if the server reply vaguely looks ok or not. Supports TLS 1.3, TLS 1.2, TLS 1.1, TLS 1.0, and *maybe* SSLv3 (untested). Optionally, the certificate chain can be fetched and parsed, at the cost of relying on pyOpenSSL.
 
+## Installation
+
+Install via pip:
+
+```bash
+pip install hello_tls
+python -m hello_tls boppreh.com
+```
+
+or clone this repo:
+
+```bash
+git clone https://github.com/boppreh/hello_tls.git
+cd hello_tls
+python hello_tls.py boppreh.com
+```
+
+## As a library
+
 ```python
 def scan_server(
     host: str,
@@ -34,7 +53,7 @@ scan_server('google.com')
 # )
 ```
 
-or, as CLI that print JSON:
+## As a command line application
 
 ```json
 $ python hello_tls.py google.com
