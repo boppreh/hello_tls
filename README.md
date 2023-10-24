@@ -8,20 +8,29 @@ There's no actual cryptography, just sending a stream of bytes and seeing if the
 
 ```python
 def scan_server(
-    server_name: str,
+    host: str,
     port: int = 443,
-    fetch_certificate_chain: bool = True,
-    max_workers: int = 5,
+    protocols: Sequence[Protocol] = tuple(Protocol),
+    enumerate_cipher_suites: bool = True,
+    fetch_cert_chain: bool = True,
+    server_name_indication: str | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
     timeout_in_seconds: float | None = DEFAULT_TIMEOUT
     ) -> ServerScanResult:
     ...
 
 scan_server('google.com')
 # ServerScanResult(
+#     host="google.com",
+#     port=443,
+#     cipher_suites_per_protocol={
+#         'TLS_1_3': [TLS_AES_256_GCM_SHA384, ...],
+#         'TLS_1_2': [TLS_RSA_WITH_3DES_EDE_CBC_SHA, ...],
+#         'TLS_1_1': [TLS_RSA_WITH_3DES_EDE_CBC_SHA, ...],
+#         'TLS_1_0': [TLS_RSA_WITH_3DES_EDE_CBC_SHA, ...],
+#         'SSLv3': False,
+#     },
 #     certificate_chain=[Certificate(...)],
-#     protocol_support={'SSLv3': False, 'TLS_1_0': True, 'TLS_1_1': True, 'TLS_1_2': True, 'TLS_1_3': True},
-#     cipher_suites_tls_1_2=[CipherSuite.TLS_RSA_WITH_AES_256_GCM_SHA384, ...],
-#     cipher_suites_tls_1_3=[CipherSuite.TLS_AES_256_GCM_SHA384, ...],
 # )
 ```
 
@@ -30,35 +39,51 @@ or, as CLI that print JSON:
 ```json
 $ python hello_tls.py google.com
 {
-  "protocol_support": {
-    "SSLv3": false,
-    "TLS_1_0": true,
-    "TLS_1_1": true,
-    "TLS_1_2": true,
-    "TLS_1_3": true
+  "host": "google.com",
+  "port": 443,
+  "cipher_suites_per_protocol": {
+    "TLS1_3": [
+      "TLS_AES_128_GCM_SHA256",
+      "TLS_AES_256_GCM_SHA384",
+      "TLS_CHACHA20_POLY1305_SHA256"
+    ],
+    "TLS1_2": [
+      "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+      "TLS_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_RSA_WITH_AES_256_CBC_SHA",
+      "TLS_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
+      "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
+    ],
+    "TLS1_1": [
+      "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+      "TLS_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_RSA_WITH_AES_256_CBC_SHA",
+      "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
+      "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"
+    ],
+    "TLS1_0": [
+      "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+      "TLS_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_RSA_WITH_AES_256_CBC_SHA",
+      "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
+      "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+      "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"
+    ],
+    "SSLv3": []
   },
-  "cipher_suites_tls_1_2": [
-    "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
-    "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
-    "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
-    "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
-    "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
-    "TLS_RSA_WITH_AES_128_GCM_SHA256",
-    "TLS_RSA_WITH_AES_128_CBC_SHA",
-    "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
-    "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
-    "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-    "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
-    "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
-    "TLS_RSA_WITH_AES_256_GCM_SHA384",
-    "TLS_RSA_WITH_AES_256_CBC_SHA",
-    "TLS_RSA_WITH_3DES_EDE_CBC_SHA"
-  ],
-  "cipher_suites_tls_1_3": [
-    "TLS_AES_256_GCM_SHA384",
-    "TLS_AES_128_GCM_SHA256",
-    "TLS_CHACHA20_POLY1305_SHA256"
-  ],
   "certificate_chain": [
     {
       "serial_number": 264635363111603634211880343082321729508,
