@@ -467,6 +467,7 @@ class Certificate:
     Represents an X509 certificate in a chain sent by the server.
     """
     serial_number: int
+    fingerprint_sha256: str
     subject: dict[str, str]
     issuer: dict[str, str]
     key_type: str
@@ -551,6 +552,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
             extensions=extensions,
             key_length_in_bits=raw_cert.get_pubkey().bits(),
             key_type=public_key_type_by_id.get(raw_cert.get_pubkey().type(), 'UNKNOWN'),
+            fingerprint=raw_cert.digest('sha256').decode('utf-8'),
         ))
     return nice_certs
 
