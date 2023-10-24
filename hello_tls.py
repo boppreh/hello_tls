@@ -466,7 +466,7 @@ class Certificate:
     """
     Represents an X509 certificate in a chain sent by the server.
     """
-    serial_number: int
+    serial_number: str
     fingerprint_sha256: str
     subject: dict[str, str]
     issuer: dict[str, str]
@@ -543,7 +543,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
             extensions[extension.get_short_name().decode('utf-8')] = str(extension)
         
         nice_certs.append(Certificate(
-            serial_number=raw_cert.get_serial_number(),
+            serial_number=str(raw_cert.get_serial_number()),
             subject=_x509_name_to_dict(raw_cert.get_subject()),
             issuer=_x509_name_to_dict(raw_cert.get_issuer()),
             not_before=_x509_time_to_datetime(raw_cert.get_notBefore()),
@@ -552,7 +552,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
             extensions=extensions,
             key_length_in_bits=raw_cert.get_pubkey().bits(),
             key_type=public_key_type_by_id.get(raw_cert.get_pubkey().type(), 'UNKNOWN'),
-            fingerprint=raw_cert.digest('sha256').decode('utf-8'),
+            fingerprint_sha256=raw_cert.digest('sha256').decode('utf-8'),
         ))
     return nice_certs
 
