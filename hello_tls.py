@@ -551,7 +551,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
 class ServerScanResult:
     host: str
     port: int
-    cipher_suites_per_protocol: dict[str, set[CipherSuite]]
+    cipher_suites_per_protocol: dict[Protocol, set[CipherSuite]]
     certificate_chain: list[Certificate] | None
 
 def scan_server(
@@ -594,7 +594,7 @@ def scan_server(
 
         if enumerate_cipher_suites:
             # Add an intermediary name to appease the type checker.
-            result.cipher_suites_per_protocol = {p.name: set() for p in protocols}
+            result.cipher_suites_per_protocol = {p: set() for p in protocols}
 
             def start_enumeration(protocol: Protocol):
                 """ Checks if the server supports this protocol, and if so, start enumerating cipher suites. """
@@ -607,7 +607,7 @@ def scan_server(
                     return
                 # Register the cipher suite we found.
                 accepted_cipher_suites = {first_cipher_suite}
-                result.cipher_suites_per_protocol[protocol.name] = accepted_cipher_suites
+                result.cipher_suites_per_protocol[protocol] = accepted_cipher_suites
                 # Divide remaining cipher suites in groups and enumerate them in parallel.
                 # Use % to distribute "desirable" cipher suites evenly.
                 n_groups = min(max_workers, MAX_WORKERS_PER_PROTOCOL)
@@ -682,20 +682,22 @@ def main():
         timeout_in_seconds=args.timeout,
     )
 
-    import sys, json, dataclasses
-    class EnhancedJSONEncoder(json.JSONEncoder):
-        """ Converts non-primitive objects to JSON """
-        def default(self, o):
-            if dataclasses.is_dataclass(o):
-                return dataclasses.asdict(o)
-            if isinstance(o, set):
-                return sorted(o)
-            elif isinstance(o, Enum):
-                return o.name
-            elif isinstance(o, datetime):
-                return o.isoformat()
-            return super().default(o)
-    json.dump(results, sys.stdout, indent=2, cls=EnhancedJSONEncoder)
+    import sys, json
+    def prepare_json(o):
+        if isinstance(o, dict):
+            return {prepare_json(key): prepare_json(value) for key, value in o.items()}
+        elif dataclasses.is_dataclass(o):
+            return prepare_json(dataclasses.asdict(o))
+        elif isinstance(o, set):
+            return sorted(prepare_json(item) for item in o)
+        elif isinstance(o, (tuple, list)):
+            return [prepare_json(item) for item in o]
+        elif isinstance(o, Enum):
+            return o.name
+        elif isinstance(o, datetime):
+            return o.isoformat()
+        return o
+    json.dump(prepare_json(results), sys.stdout, indent=2)
 
 if __name__ == '__main__':
     main()
