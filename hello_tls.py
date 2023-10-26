@@ -434,28 +434,33 @@ class ProxyError(Exception):
     pass
 
 def make_socket(hello_prefs: TlsHelloSettings) -> socket.socket:
-    if hello_prefs.proxy:
-        if not hello_prefs.proxy.startswith('http://'):
-            raise ProxyError("Only HTTP proxies are supported at the moment. Got: " + hello_prefs.proxy)
-        proxy_host, proxy_port = parse_target(hello_prefs.proxy, 80)
-        sock = socket.create_connection((proxy_host, proxy_port), timeout=hello_prefs.timeout_in_seconds)
-        try:
-            sock.send(f"CONNECT {hello_prefs.server_host}:{hello_prefs.server_port} HTTP/1.1\r\nhost:{proxy_host}\r\n\r\n".encode('utf-8'))
-            sock_file = sock.makefile('r', newline='\r\n')
-            line = sock_file.readline()
-            if not re.match(r'HTTP/1.[01] 200 Connection Established', line):
-                sock_file.close()
-                sock.close()
-                raise ProxyError("Proxy refused the connection: ", line)
-            while True:
-                if sock_file.readline() == '\r\n':
-                    break
-        except:
+    """
+    Creates and connects a socket to the target server, through the chosen proxy if any.
+    """
+    if not hello_prefs.proxy:
+        return socket.create_connection((hello_prefs.server_host, hello_prefs.server_port), timeout=hello_prefs.timeout_in_seconds)
+
+    if not hello_prefs.proxy.startswith('http://'):
+        raise ProxyError("Only HTTP proxies are supported at the moment.", hello_prefs.proxy)
+    
+    proxy_host, proxy_port = parse_target(hello_prefs.proxy, 80)
+    sock = socket.create_connection((proxy_host, proxy_port), timeout=hello_prefs.timeout_in_seconds)
+
+    try:
+        sock.send(f"CONNECT {hello_prefs.server_host}:{hello_prefs.server_port} HTTP/1.1\r\nhost:{proxy_host}\r\n\r\n".encode('utf-8'))
+        sock_file = sock.makefile('r', newline='\r\n')
+        line = sock_file.readline()
+        if not re.fullmatch(r'HTTP/1.[01] 200 Connection Established\r\n', line):
+            sock_file.close()
             sock.close()
-            raise
-        sock.settimeout(hello_prefs.timeout_in_seconds)
-    else:
-        sock = socket.create_connection((hello_prefs.server_host, hello_prefs.server_port), timeout=hello_prefs.timeout_in_seconds)
+            raise ProxyError("Proxy refused the connection: ", line)
+        while True:
+            if sock_file.readline() == '\r\n':
+                break
+    except:
+        sock.close()
+        raise
+
     return sock
 
 def send_hello(hello_prefs: TlsHelloSettings) -> bytes:
