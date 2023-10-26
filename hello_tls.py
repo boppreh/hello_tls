@@ -642,6 +642,22 @@ def scan_server(
 
     return result
 
+def parse_target(target:str) -> tuple[str, int]:
+    """
+    Parses the target string into a host and port, stripping protocol and path.
+    """
+    import re
+    from urllib.parse import urlparse
+    if not re.match(r'\w+://', target):
+        # Without a scheme, urlparse will treat the target as a path.
+        # Prefix // to make it a netloc.
+        url = urlparse('//' + target)
+    else:
+        url = urlparse(target, scheme='https')
+    host = url.hostname or 'localhost'
+    port = url.port if url.port and url.scheme != 'http' else 443
+    return host, port
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -673,15 +689,7 @@ def main():
     if args.max_workers > total_workers:
         logging.warning(f'--max-workers is {args.max_workers}, but only {total_workers} workers will ever be used at once')
 
-    from urllib.parse import urlparse
-    if not '//' in args.target:
-        # Without a scheme, urlparse will treat the target as a path.
-        # Prefix // to make it a netloc.
-        url = urlparse('//' + args.target)
-    else:
-        url = urlparse(args.target, scheme='https')
-    host = url.hostname or 'localhost'
-    port = url.port if url.port and url.scheme != 'http' else 443
+    host, port = parse_target(args.target)
 
     if args.certs and protocols == [Protocol.SSLv3]:
         parser.error("SSLv3 is not supported by pyOpenSSL, so `--protocols SSLv3` must be used with `--no-certs`")
