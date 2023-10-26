@@ -558,10 +558,17 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
     return nice_certs
 
 @dataclasses.dataclass
+class ProtocolResult:
+    version: Protocol
+    is_supported: bool
+    has_cipher_suite_order: bool
+    cipher_suites: Sequence[CipherSuite]
+
+@dataclasses.dataclass
 class ServerScanResult:
     host: str
     port: int
-    cipher_suites_per_protocol: dict[Protocol, Sequence[CipherSuite]]
+    protocols: list[ProtocolResult]
     certificate_chain: list[Certificate] | None
 
 def scan_server(
@@ -587,7 +594,7 @@ def scan_server(
     result = ServerScanResult(
         host=host,
         port=port,
-        cipher_suites_per_protocol={p: [] for p in Protocol},
+        protocols=[],
         certificate_chain=None,
     )
 
@@ -606,7 +613,15 @@ def scan_server(
             def test_protocol(protocol: Protocol):
                 suites_to_test = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
                 protocol_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=suites_to_test)
-                result.cipher_suites_per_protocol[protocol] = enumerate_server_cipher_suites(protocol_prefs)
+                accepted_cipher_suites = enumerate_server_cipher_suites(protocol_prefs)
+                if len(accepted_cipher_suites) > 1:
+                    reversed_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=reversed(suites_to_test))
+                    new_preference = get_server_preferred_cipher_suite(reversed_prefs)
+                    has_preferred_order = new_preference == accepted_cipher_suites[0]
+                else:
+                    has_preferred_order = False
+                result.protocols.append(ProtocolResult(protocol, bool(accepted_cipher_suites), has_preferred_order, accepted_cipher_suites))
+
             for protocol in protocols:
                 add_task(test_protocol, (protocol,))
 
@@ -614,6 +629,8 @@ def scan_server(
         # pool.close() + pool.join() perform a similar job, but discard task errors.
         for task in tasks:
             task.get()
+
+    result.protocols.sort(key=lambda protocol: protocol.version, reverse=True)
 
     return result
 
