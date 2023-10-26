@@ -19,11 +19,6 @@ MAX_WORKERS_PER_PROTOCOL: int = 3
 
 @total_ordering
 class Protocol(Enum):
-    def __lt__(self, other):
-        if self.__class__ != other.__class__:
-            return NotImplemented
-        return self.value < other.value
-
     # Keep protocols in order of preference.
     TLS1_3 = b"\x03\x04"
     TLS1_2 = b"\x03\x03"
@@ -35,6 +30,10 @@ class Protocol(Enum):
         return self.name
     def __repr__(self):
         return self.name
+    def __lt__(self, other):
+        if self.__class__ != other.__class__:
+            return NotImplemented
+        return self.value < other.value
 
 class RecordType(Enum):
     INVALID = 0 # Unused in this script.
@@ -58,13 +57,6 @@ class HandshakeType(Enum):
 
 @total_ordering
 class CipherSuite(Enum):
-    def __lt__(self, other):
-        if self.__class__ != other.__class__:
-            return NotImplemented
-        return self.value < other.value
-    def __repr__(self):
-        return self.name
-    
     # For compability.
     TLS_EMPTY_RENEGOTIATION_INFO_SCSV = b"\x00\xff"
 
@@ -157,6 +149,15 @@ class CipherSuite(Enum):
     TLS_RSA_WITH_NULL_SHA256 = b'\x00\x3B'
     TLS_RSA_WITH_RC4_128_MD5 = b'\x00\x04'
     TLS_RSA_WITH_RC4_128_SHA = b'\x00\x05'
+
+    def __lt__(self, other):
+        if self.__class__ != other.__class__:
+            return NotImplemented
+        return self.value < other.value
+    def __str__(self):
+        return self.name
+    def __repr__(self):
+        return self.name
 
 TLS1_3_CIPHER_SUITES = [
     CipherSuite.TLS_AES_128_GCM_SHA256,
