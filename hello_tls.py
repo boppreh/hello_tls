@@ -442,7 +442,7 @@ def get_server_preferred_cipher_suite(hello_prefs: TlsHelloSettings) -> CipherSu
     
     return server_hello.cipher_suite
 
-def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> set[CipherSuite]:
+def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[CipherSuite]:
     """
     Given a list of cipher suites to test, sends a sequence of Client Hello packets to the server,
     removing the accepted cipher suite from the list each time.
@@ -450,12 +450,12 @@ def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> set[CipherS
     """
     logger.info(f"Testing support of {len(hello_prefs.cipher_suites)} cipher suites with protocols {hello_prefs.protocols}")
     cipher_suites_to_test = list(hello_prefs.cipher_suites)
-    accepted_cipher_suites = set()
+    accepted_cipher_suites = []
     while cipher_suites_to_test:
         hello_prefs = dataclasses.replace(hello_prefs, cipher_suites=cipher_suites_to_test)
         cipher_suite_picked = get_server_preferred_cipher_suite(hello_prefs)
         if cipher_suite_picked:
-            accepted_cipher_suites.add(cipher_suite_picked)
+            accepted_cipher_suites.append(cipher_suite_picked)
             cipher_suites_to_test.remove(cipher_suite_picked)
         else:
             break
@@ -561,7 +561,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
 class ServerScanResult:
     host: str
     port: int
-    cipher_suites_per_protocol: dict[Protocol, set[CipherSuite]]
+    cipher_suites_per_protocol: dict[Protocol, Sequence[CipherSuite]]
     certificate_chain: list[Certificate] | None
 
 def scan_server(
@@ -587,7 +587,7 @@ def scan_server(
     result = ServerScanResult(
         host=host,
         port=port,
-        cipher_suites_per_protocol={},
+        cipher_suites_per_protocol={p: [] for p in Protocol},
         certificate_chain=None,
     )
 
@@ -603,32 +603,12 @@ def scan_server(
             ))
 
         if enumerate_cipher_suites:
-            # Add an intermediary name to appease the type checker.
-            result.cipher_suites_per_protocol = {p: set() for p in protocols}
-
-            def start_enumeration(protocol: Protocol):
-                """ Checks if the server supports this protocol, and if so, start enumerating cipher suites. """
+            def test_protocol(protocol: Protocol):
                 suites_to_test = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
-                logger.debug(f"Testing server support for {protocol}")
-                first_cipher_suite = get_server_preferred_cipher_suite(dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=suites_to_test))
-                if not first_cipher_suite:
-                    # The server doesn't support this protocol at all.
-                    logger.info(f"Server does not support {protocol}")
-                    return
-                # Register the cipher suite we found.
-                accepted_cipher_suites = {first_cipher_suite}
-                result.cipher_suites_per_protocol[protocol] = accepted_cipher_suites
-                # Divide remaining cipher suites in groups and enumerate them in parallel.
-                # Use % to distribute "desirable" cipher suites evenly.
-                n_groups = min(max_workers, MAX_WORKERS_PER_PROTOCOL)
-                groups = [[suite for i, suite in enumerate(suites_to_test) if i % n_groups == j and suite != first_cipher_suite] for j in range(n_groups)]
-                logger.debug(f"Starting enumeration of cipher suites for {protocol}")
-                for cipher_suite_group in groups:
-                    prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=cipher_suite_group)
-                    add_task(lambda prefs=prefs: accepted_cipher_suites.update(enumerate_server_cipher_suites(prefs)))
-
+                protocol_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=suites_to_test)
+                result.cipher_suites_per_protocol[protocol] = enumerate_server_cipher_suites(protocol_prefs)
             for protocol in protocols:
-                add_task(start_enumeration, (protocol,))
+                add_task(test_protocol, (protocol,))
 
         # Join all tasks, waiting for them to finish in any order.
         # pool.close() + pool.join() perform a similar job, but discard task errors.
