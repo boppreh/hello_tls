@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Sequence
 from enum import Enum
 import dataclasses
+from dataclasses import dataclass
 import logging
 import socket
 import struct
@@ -213,11 +214,13 @@ class ServerAlertError(Exception):
         self.level = level
         self.description = description
 
-@dataclasses.dataclass
+class BadServerResponse(Exception):
+    pass
+
+@dataclass
 class ServerHello:
-    # TODO: parse more accurate protocol version by reading the TLS 1.3 extension.
-    legacy_record_protocol: Protocol
-    legacy_server_protocol: Protocol
+    version: Protocol
+    has_compression: bool
     cipher_suite: CipherSuite
 
 def try_parse_server_error(packet: bytes) -> ServerAlertError | None:
@@ -261,11 +264,22 @@ def parse_server_hello(packet: bytes) -> ServerHello:
 
     assert HandshakeType(handshake_type_int) == HandshakeType.server_hello
 
-    cipher_suite_start = begin_length+session_id_length
-    cipher_suite_id = bytes(packet[cipher_suite_start:cipher_suite_start+2])
-    return ServerHello(Protocol(legacy_record_version), Protocol(server_version), CipherSuite(cipher_suite_id))
+    rest_of_pakcet = packet[begin_length+session_id_length:]
 
-@dataclasses.dataclass
+    (
+        cipher_suite,
+        compression_method,
+        extensions_length,
+    ) = struct.unpack('!HBH', rest_of_pakcet[:5])
+
+    cipher_suite_start = begin_length+session_id_length
+    cipher_suite = CipherSuite(bytes(packet[cipher_suite_start:cipher_suite_start+2]))
+    # server_version is limited to TLS 1.2, so check the cipher suite to see if it's actually TLS 1.3.
+    # TODO: parse more accurate protocol version by reading the TLS 1.3 extension.
+    version = Protocol.TLS1_3 if cipher_suite in TLS1_3_CIPHER_SUITES else Protocol(server_version)
+    return ServerHello(version, compression_method != 0, cipher_suite)
+
+@dataclass
 class TlsHelloSettings:
     """
     Settings necessary to send a TLS Client Hello to a server.
@@ -415,32 +429,24 @@ def send_hello(hello_prefs: TlsHelloSettings) -> bytes:
     with socket.create_connection((hello_prefs.server_host, hello_prefs.server_port), timeout=hello_prefs.timeout_in_seconds) as sock:
         sock.send(make_client_hello(hello_prefs))
         return sock.recv(512)
-
-def get_server_preferred_cipher_suite(hello_prefs: TlsHelloSettings) -> CipherSuite | None:
+    
+def get_server_hello(hello_prefs: TlsHelloSettings) -> ServerHello:
     """
-    Attempts to connect to the server and returns the cipher suite picked by the server, if any.
-    Protocol and cipher suite errors are swallowed, returning None, but other errors are raised.
+    Sends a Client Hello to the server, and returns the parsed ServerHello.
+    Raises exceptions for the different alert messages the server can send.
     """
     response = send_hello(hello_prefs)
     if error := try_parse_server_error(response):
         logger.info(f"Server rejected Client Hello: {error.description.name}")
-        if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure]:
-            return None
-        else:
-            raise error
+        raise error
     
     server_hello = parse_server_hello(response)
-    is_protocol_expected = (
-        server_hello.legacy_server_protocol in hello_prefs.protocols
-        # Server version is always <=TLS 1.2 for compatibility reasons, it might actually be TLS 1.3.
-        or server_hello.cipher_suite in TLS1_3_CIPHER_SUITES and Protocol.TLS1_3 in hello_prefs.protocols
-    )
-    if not is_protocol_expected:
+    if server_hello.version not in hello_prefs.protocols:
         # Server picked a protocol we didn't ask for.
-        logger.info(f"Server attempted to downgrade protocol to unsupported version {server_hello.legacy_server_protocol}")
-        return None
+        logger.info(f"Server attempted to downgrade protocol to unsupported version {server_hello.version}")
+        raise BadServerResponse(f"Server attempted to downgrade from {hello_prefs.protocols} to {server_hello.version}")
     
-    return server_hello.cipher_suite
+    return server_hello
 
 def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[CipherSuite]:
     """
@@ -453,16 +459,18 @@ def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[Ci
     accepted_cipher_suites = []
     while cipher_suites_to_test:
         hello_prefs = dataclasses.replace(hello_prefs, cipher_suites=cipher_suites_to_test)
-        cipher_suite_picked = get_server_preferred_cipher_suite(hello_prefs)
-        if cipher_suite_picked:
-            accepted_cipher_suites.append(cipher_suite_picked)
-            cipher_suites_to_test.remove(cipher_suite_picked)
-        else:
-            break
+        try:
+            cipher_suite_picked = get_server_hello(hello_prefs).cipher_suite
+        except ServerAlertError as error:
+            if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure]:
+                break
+            raise error
+        accepted_cipher_suites.append(cipher_suite_picked)
+        cipher_suites_to_test.remove(cipher_suite_picked)
     logger.info(f"Server accepted {len(accepted_cipher_suites)} cipher suites with protocols {hello_prefs.protocols}")
     return accepted_cipher_suites
 
-@dataclasses.dataclass
+@dataclass
 class Certificate:
     """
     Represents an X509 certificate in a chain sent by the server.
@@ -557,18 +565,17 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
         ))
     return nice_certs
 
-@dataclasses.dataclass
+@dataclass
 class ProtocolResult:
-    version: Protocol
-    is_supported: bool
+    has_compression: bool
     has_cipher_suite_order: bool
     cipher_suites: Sequence[CipherSuite]
 
-@dataclasses.dataclass
+@dataclass
 class ServerScanResult:
     host: str
     port: int
-    protocols: list[ProtocolResult]
+    protocols: dict[Protocol, ProtocolResult | None]
     certificate_chain: list[Certificate] | None
 
 def scan_server(
@@ -594,7 +601,7 @@ def scan_server(
     result = ServerScanResult(
         host=host,
         port=port,
-        protocols=[],
+        protocols={p: None for p in Protocol},
         certificate_chain=None,
     )
 
@@ -613,14 +620,17 @@ def scan_server(
             def test_protocol(protocol: Protocol):
                 suites_to_test = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
                 protocol_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=suites_to_test)
-                accepted_cipher_suites = enumerate_server_cipher_suites(protocol_prefs)
-                if len(accepted_cipher_suites) > 1:
-                    reversed_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=reversed(suites_to_test))
-                    new_preference = get_server_preferred_cipher_suite(reversed_prefs)
-                    has_preferred_order = new_preference == accepted_cipher_suites[0]
-                else:
-                    has_preferred_order = False
-                result.protocols.append(ProtocolResult(protocol, bool(accepted_cipher_suites), has_preferred_order, accepted_cipher_suites))
+                try:
+                    server_hello = get_server_hello(protocol_prefs)
+                except ServerAlertError as error:
+                    return
+
+                # Reverse cipher suite order to check if the server respect the client preferences.
+                reversed_prefs = dataclasses.replace(protocol_prefs, cipher_suites=list(reversed(suites_to_test)))
+                other_accepted_cipher_suites = enumerate_server_cipher_suites(reversed_prefs)
+                has_compression = server_hello.has_compression
+                has_cipher_suite_order = bool(other_accepted_cipher_suites) and server_hello.cipher_suite == other_accepted_cipher_suites[0]
+                result.protocols[protocol] = ProtocolResult(has_compression, has_cipher_suite_order, other_accepted_cipher_suites)
 
             for protocol in protocols:
                 add_task(test_protocol, (protocol,))
@@ -629,8 +639,6 @@ def scan_server(
         # pool.close() + pool.join() perform a similar job, but discard task errors.
         for task in tasks:
             task.get()
-
-    result.protocols.sort(key=lambda protocol: protocol.version, reverse=True)
 
     return result
 
