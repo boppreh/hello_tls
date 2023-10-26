@@ -287,6 +287,7 @@ class TlsHelloSettings:
     """
     server_host: str
     server_port: int = 443
+    proxy: str | None = None
     timeout_in_seconds: float | None = DEFAULT_TIMEOUT
 
     server_name_indication: str | None = None # Defaults to server_host if not provided.
@@ -421,12 +422,28 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
         ]))
     ))
 
+def connect_to_proxy(conn: socket.socket, proxy:str):
+    """
+    Prepares a socket by connecting through the given HTTP proxy.
+    """
+    assert proxy.startswith('http://')
+    conn.send(f"CONNECT {proxy} HTTP/1.1\r\n\r\n".encode('ascii'))
+
+def make_socket(hello_prefs: TlsHelloSettings) -> socket.socket:
+    if hello_prefs.proxy:
+        assert hello_prefs.proxy.startswith('http://')
+        sock = socket.create_connection(parse_target(hello_prefs.proxy, 80), timeout=hello_prefs.timeout_in_seconds)
+        sock.send(f"CONNECT {hello_prefs.server_host:hello_prefs.server_port} HTTP/1.1\r\n\r\n".encode('ascii'))
+    else:
+        sock = socket.create_connection((hello_prefs.server_host, hello_prefs.server_port), timeout=hello_prefs.timeout_in_seconds)
+    return sock
+
 def send_hello(hello_prefs: TlsHelloSettings) -> bytes:
     """
     Sends a Client Hello packet to the server based on hello_prefs, and returns the first few bytes of the server response.
     """
     logger.debug(f"Sending Client Hello to {hello_prefs.server_host}:{hello_prefs.server_port}")
-    with socket.create_connection((hello_prefs.server_host, hello_prefs.server_port), timeout=hello_prefs.timeout_in_seconds) as sock:
+    with make_socket(hello_prefs) as sock:
         sock.send(make_client_hello(hello_prefs))
         return sock.recv(512)
     
@@ -503,6 +520,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
     Use socket and pyOpenSSL to get the server certificate chain.
     """
     from OpenSSL import SSL, crypto
+    import ssl, select
 
     def _x509_name_to_dict(x509_name: crypto.X509Name) -> dict[str, str]:
         return {name.decode('utf-8'): value.decode('utf-8') for name, value in x509_name.get_components()}
@@ -520,20 +538,27 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
         Protocol.TLS1_3: SSL.OP_NO_TLSv1_3,
     }
     logger.info("Fetching certificate chain with pyOpenSSL")
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    with make_socket(hello_prefs) as sock:
         # This order of operations is necessary to work around a pyOpenSSL bug:
         # https://github.com/pyca/pyopenssl/issues/168#issuecomment-289194607
         context = SSL.Context(SSL.TLS_CLIENT_METHOD)
         forbidden_versions = sum(no_flag_by_protocol[protocol] for protocol in Protocol if protocol not in hello_prefs.protocols)
         context.set_options(forbidden_versions)
         connection = SSL.Connection(context, sock)
-        connection.settimeout(hello_prefs.timeout_in_seconds)
-        connection.connect((hello_prefs.server_host, hello_prefs.server_port))
-        connection.setblocking(True)
-        
+        connection.set_connect_state()        
         # Necessary for servers that expect SNI. Otherwise expect "tlsv1 alert internal error".
         connection.set_tlsext_host_name((hello_prefs.server_name_indication or hello_prefs.server_host).encode('utf-8'))
-        connection.do_handshake()
+        while True:
+            try:
+                connection.do_handshake()
+                break
+            except SSL.WantReadError:
+                rd, _, _ = select.select([sock], [], [], sock.gettimeout())
+                if not rd:
+                    raise socket.timeout('select timed out')
+                continue
+            except SSL.Error as e:
+                raise ssl.SSLError(f'bad handshake: {e}')
         connection.shutdown()
 
     raw_certs = connection.get_peer_cert_chain()
@@ -586,7 +611,8 @@ def scan_server(
     fetch_cert_chain: bool = True,
     server_name_indication: str | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
-    timeout_in_seconds: float | None = DEFAULT_TIMEOUT
+    timeout_in_seconds: float | None = DEFAULT_TIMEOUT,
+    proxy:str | None = None,
     ) -> ServerScanResult:
     """
     Scans a SSL/TLS server for supported protocols, cipher suites, and certificate chain.
@@ -596,7 +622,7 @@ def scan_server(
     Runs scans in parallel to speed up the process, with up to `max_workers` threads connecting at the same time.
     """
     logger.info(f"Scanning {host}:{port}")
-    hello_prefs = TlsHelloSettings(host, port, timeout_in_seconds, server_name_indication=server_name_indication, protocols=protocols)
+    hello_prefs = TlsHelloSettings(host, port, proxy, timeout_in_seconds, server_name_indication=server_name_indication, protocols=protocols)
 
     result = ServerScanResult(
         host=host,
@@ -642,7 +668,7 @@ def scan_server(
 
     return result
 
-def parse_target(target:str) -> tuple[str, int]:
+def parse_target(target:str, default_port:int = 443) -> tuple[str, int]:
     """
     Parses the target string into a host and port, stripping protocol and path.
     """
@@ -655,10 +681,11 @@ def parse_target(target:str) -> tuple[str, int]:
     else:
         url = urlparse(target, scheme='https')
     host = url.hostname or 'localhost'
-    port = url.port if url.port and url.scheme != 'http' else 443
+    port = url.port if url.port else default_port
     return host, port
 
 def main():
+    import os
     import argparse
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("target", help="server to scan, in the form of 'example.com', 'example.com:443', or even a full URL")
@@ -668,6 +695,7 @@ def main():
     parser.add_argument("--certs", "-c", default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
     parser.add_argument("--enumerate-cipher-suites", "-e", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites for each protocol")
     parser.add_argument("--protocols", "-p", dest='protocols_str', default=','.join(p.name for p in Protocol), help="comma separated list of TLS/SSL protocols to test")
+    parser.add_argument("--proxy", default=None, help="HTTP proxy to use for the connection, defaults to the env variable 'http_proxy' else no proxy")
     parser.add_argument("--verbose", "-v", action="count", default=0, help="increase output verbosity")
     args = parser.parse_args()
 
@@ -703,6 +731,7 @@ def main():
         server_name_indication=args.server_name_indication,
         max_workers=args.max_workers,
         timeout_in_seconds=args.timeout,
+        proxy=args.proxy or os.environ.get('http_proxy'),
     )
 
     import sys, json
