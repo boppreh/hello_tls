@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import logging
 import socket
 import struct
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -429,11 +430,30 @@ def connect_to_proxy(conn: socket.socket, proxy:str):
     assert proxy.startswith('http://')
     conn.send(f"CONNECT {proxy} HTTP/1.1\r\n\r\n".encode('ascii'))
 
+class ProxyError(Exception):
+    pass
+
 def make_socket(hello_prefs: TlsHelloSettings) -> socket.socket:
     if hello_prefs.proxy:
-        assert hello_prefs.proxy.startswith('http://')
-        sock = socket.create_connection(parse_target(hello_prefs.proxy, 80), timeout=hello_prefs.timeout_in_seconds)
-        sock.send(f"CONNECT {hello_prefs.server_host:hello_prefs.server_port} HTTP/1.1\r\n\r\n".encode('ascii'))
+        if not hello_prefs.proxy.startswith('http://'):
+            raise ProxyError("Only HTTP proxies are supported at the moment. Got: " + hello_prefs.proxy)
+        proxy_host, proxy_port = parse_target(hello_prefs.proxy, 80)
+        sock = socket.create_connection((proxy_host, proxy_port), timeout=hello_prefs.timeout_in_seconds)
+        try:
+            sock.send(f"CONNECT {hello_prefs.server_host}:{hello_prefs.server_port} HTTP/1.1\r\nhost:{proxy_host}\r\n\r\n".encode('utf-8'))
+            sock_file = sock.makefile('r', newline='\r\n')
+            line = sock_file.readline()
+            if not re.match(r'HTTP/1.[01] 200 Connection Established', line):
+                sock_file.close()
+                sock.close()
+                raise ProxyError("Proxy refused the connection: ", line)
+            while True:
+                if sock_file.readline() == '\r\n':
+                    break
+        except:
+            sock.close()
+            raise
+        sock.settimeout(hello_prefs.timeout_in_seconds)
     else:
         sock = socket.create_connection((hello_prefs.server_host, hello_prefs.server_port), timeout=hello_prefs.timeout_in_seconds)
     return sock
@@ -456,8 +476,13 @@ def get_server_hello(hello_prefs: TlsHelloSettings) -> ServerHello:
     if error := try_parse_server_error(response):
         logger.info(f"Server rejected Client Hello: {error.description.name}")
         raise error
+
+    try:
+        server_hello = parse_server_hello(response)
+    except ValueError:
+        logger.info("Server sent invalid response")
+        raise BadServerResponse("Server sent invalid response", response)
     
-    server_hello = parse_server_hello(response)
     if server_hello.version not in hello_prefs.protocols:
         # Server picked a protocol we didn't ask for.
         logger.info(f"Server attempted to downgrade protocol to unsupported version {server_hello.version}")
