@@ -788,7 +788,7 @@ def scan_server(
     host: str,
     port: int = 443,
     protocols: Sequence[Protocol] = tuple(Protocol),
-    enumerate_cipher_suites: bool = True,
+    enumerate_options: bool = True,
     fetch_cert_chain: bool = True,
     server_name_indication: str | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
@@ -827,7 +827,7 @@ def scan_server(
                 get_server_certificate_chain(hello_prefs)
             ))
 
-        if enumerate_cipher_suites:
+        if enumerate_options:
             def save_protocol_results(server_hello_result, groups_result, cipher_suites_result, protocol):
                 try:
                     server_hello = server_hello_result.get()
@@ -890,7 +890,7 @@ def main():
     parser.add_argument("--max-workers", "-w", type=int, default=DEFAULT_MAX_WORKERS, help=f"maximum number of threads/concurrent connections to use for scanning")
     parser.add_argument("--server-name-indication", "-s", default='', help=f"value to be used in the SNI extension, defaults to the target host")
     parser.add_argument("--certs", "-c", default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
-    parser.add_argument("--enumerate-cipher-suites", "-e", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites for each protocol")
+    parser.add_argument("--enumerate", "-e", dest='enumerate', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported protocols, cipher suites, groups, compression, etc")
     parser.add_argument("--protocols", "-p", dest='protocols_str', default=','.join(p.name for p in Protocol), help="comma separated list of TLS/SSL protocols to test")
     parser.add_argument("--proxy", default=None, help="HTTP proxy to use for the connection, defaults to the env variable 'http_proxy' else no proxy")
     parser.add_argument("--verbose", "-v", action="count", default=0, help="increase output verbosity")
@@ -921,7 +921,7 @@ def main():
         host,
         port=port,
         protocols=protocols,
-        enumerate_cipher_suites=args.enumerate_cipher_suites,
+        enumerate_options=args.enumerate,
         fetch_cert_chain=args.certs,
         server_name_indication=args.server_name_indication,
         max_workers=args.max_workers,
