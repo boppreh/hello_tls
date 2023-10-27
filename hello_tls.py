@@ -905,6 +905,8 @@ def main():
     if args.certs and protocols == [Protocol.SSLv3]:
         parser.error("SSLv3 is not supported by pyOpenSSL, so `--protocols SSLv3` must be used with `--no-certs`")
 
+    proxy = os.environ.get('https_proxy') or os.environ.get('HTTPS_PROXY') if args.proxy is None else args.proxy
+
     results = scan_server(
         host,
         port=port,
@@ -914,7 +916,7 @@ def main():
         server_name_indication=args.server_name_indication,
         max_workers=args.max_workers,
         timeout_in_seconds=args.timeout,
-        proxy=args.proxy or os.environ.get('http_proxy'),
+        proxy=proxy,
     )
 
     import sys, json
