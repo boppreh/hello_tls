@@ -395,7 +395,11 @@ def parse_server_hello(packet: bytes) -> ServerHello:
         if extension_type == ExtensionType.supported_versions.value:
             version = Protocol(extension_data)
         elif extension_type == ExtensionType.key_share.value:
-            group = Group(extension_data[:2])
+            try:
+                group = Group(extension_data[:2])
+            except ValueError:
+                logger.warning(f'Unknown group: {extension_data[:2]}')
+                pass
     
     cipher_suite = CipherSuite(cipher_suite_bytes)
     return ServerHello(version, compression_method != 0, cipher_suite, group)
@@ -629,6 +633,30 @@ def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[Ci
     logger.info(f"Server accepted {len(accepted_cipher_suites)} cipher suites with protocols {hello_prefs.protocols}")
     return accepted_cipher_suites
 
+def enumerate_server_groups(hello_prefs: TlsHelloSettings) -> Sequence[Group]:
+    """
+    Given a list of groups to test, sends a sequence of Client Hello packets to the server,
+    removing the accepted group from the list each time.
+    Returns a list of all groups the server accepted.
+    """
+    logger.info(f"Testing support of {len(hello_prefs.cipher_suites)} groups with protocols {hello_prefs.protocols}")
+    groups_to_test = list(hello_prefs.groups)
+    accepted_groups = []
+    while groups_to_test:
+        hello_prefs = dataclasses.replace(hello_prefs, groups=groups_to_test)
+        try:
+            group_picked = get_server_hello(hello_prefs).group
+        except ServerAlertError as error:
+            if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure]:
+                break
+            raise error
+        if not group_picked or group_picked not in groups_to_test:
+            break
+        accepted_groups.append(group_picked)
+        groups_to_test.remove(group_picked)
+    logger.info(f"Server accepted {len(accepted_groups)} cipher suites with protocols {hello_prefs.protocols}")
+    return accepted_groups
+
 @dataclass
 class Certificate:
     """
@@ -736,7 +764,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
 class ProtocolResult:
     has_compression: bool
     has_cipher_suite_order: bool
-    group: Group | None
+    groups: Sequence[Group] | None
     cipher_suites: Sequence[CipherSuite]
 
 @dataclass
@@ -797,10 +825,11 @@ def scan_server(
                 # Reverse cipher suite order to check if the server respect the client preferences.
                 reversed_prefs = dataclasses.replace(protocol_prefs, cipher_suites=list(reversed(suites_to_test)))
                 cipher_suites = enumerate_server_cipher_suites(reversed_prefs)
+                groups = enumerate_server_groups(protocol_prefs)
                 result.protocols[protocol] = ProtocolResult(
                     has_compression=server_hello.has_compression,
                     has_cipher_suite_order=bool(cipher_suites) and server_hello.cipher_suite == cipher_suites[0],
-                    group=server_hello.group,
+                    groups=groups,
                     cipher_suites=cipher_suites,
                 )
 
