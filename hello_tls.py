@@ -805,7 +805,11 @@ def scan_server(
     tasks = []
     with ThreadPool(max_workers) as pool:
         logger.debug("Initializing workers")
-        add_task = lambda f, args=(): tasks.append(pool.apply_async(f, args))
+
+        def add_task(f, args=(), ignore_errors=False):
+            task = pool.apply_async(f, args, error_callback=lambda e: None if ignore_errors else logger.error(e))
+            tasks.append(task)
+            return task
 
         if fetch_cert_chain:
             add_task(lambda: result.__setattr__(
@@ -814,18 +818,14 @@ def scan_server(
             ))
 
         if enumerate_cipher_suites:
-            def test_protocol(protocol: Protocol):
-                suites_to_test = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
-                protocol_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=suites_to_test)
+            def save_protocol_results(server_hello_result, groups_result, cipher_suites_result, protocol):
                 try:
-                    server_hello = get_server_hello(protocol_prefs)
-                except ServerAlertError as error:
+                    server_hello = server_hello_result.get()
+                    groups = groups_result.get()
+                    cipher_suites = cipher_suites_result.get()
+                except ServerAlertError:
                     return
 
-                # Reverse cipher suite order to check if the server respect the client preferences.
-                reversed_prefs = dataclasses.replace(protocol_prefs, cipher_suites=list(reversed(suites_to_test)))
-                cipher_suites = enumerate_server_cipher_suites(reversed_prefs)
-                groups = enumerate_server_groups(protocol_prefs)
                 result.protocols[protocol] = ProtocolResult(
                     has_compression=server_hello.has_compression,
                     has_cipher_suite_order=bool(cipher_suites) and server_hello.cipher_suite == cipher_suites[0],
@@ -834,12 +834,24 @@ def scan_server(
                 )
 
             for protocol in protocols:
-                add_task(test_protocol, (protocol,))
+                suites_to_test = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
+                protocol_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=suites_to_test)
+                reversed_prefs = dataclasses.replace(protocol_prefs, cipher_suites=list(reversed(suites_to_test)))
+                
+                # Create async tasks for each category of test.
+                server_hello_result = add_task(get_server_hello, (protocol_prefs,), ignore_errors=True)
+                groups_result = add_task(enumerate_server_groups, (protocol_prefs,), ignore_errors=True)
+                # Reverse cipher suite order to check if the server respect the client preferences.
+                cipher_suites_result = add_task(enumerate_server_cipher_suites, (reversed_prefs,), ignore_errors=True)
 
-        # Join all tasks, waiting for them to finish in any order.
-        # pool.close() + pool.join() perform a similar job, but discard task errors.
-        for task in tasks:
-            task.get()
+                # And schedule an async task to wait for the results and save them.
+                add_task(save_protocol_results, (server_hello_result, groups_result, cipher_suites_result, protocol))
+
+        pool.close()
+        pool.join()
+
+    if max_workers > len(tasks):
+        logging.warning(f'Max workers is {max_workers}, but only {len(tasks)} tasks were ever created')
 
     return result
 
@@ -887,10 +899,6 @@ def main():
         protocols = [Protocol[p] for p in args.protocols_str.split(',')]
     except KeyError as e:
         parser.error(f'invalid protocol name "{e.args[0]}", must be one of {", ".join(p.name for p in Protocol)}')
-
-    total_workers = int(args.certs) + int(args.enumerate_cipher_suites) * len(protocols) * MAX_WORKERS_PER_PROTOCOL
-    if args.max_workers > total_workers:
-        logging.warning(f'--max-workers is {args.max_workers}, but only {total_workers} workers will ever be used at once')
 
     host, port = parse_target(args.target)
 
