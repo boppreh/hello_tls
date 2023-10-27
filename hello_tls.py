@@ -566,7 +566,7 @@ def make_socket(hello_prefs: TlsHelloSettings) -> socket.socket:
         sock.send(f"CONNECT {hello_prefs.server_host}:{hello_prefs.server_port} HTTP/1.1\r\nhost:{proxy_host}\r\n\r\n".encode('utf-8'))
         sock_file = sock.makefile('r', newline='\r\n')
         line = sock_file.readline()
-        if not re.fullmatch(r'HTTP/1.[01] 200 Connection Established\r\n', line):
+        if not re.fullmatch(r'HTTP/1\.[01] 200 Connection [Ee]stablished\r\n', line):
             sock_file.close()
             sock.close()
             raise ProxyError("Proxy refused the connection: ", line)
