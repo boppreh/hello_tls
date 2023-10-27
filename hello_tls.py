@@ -1,7 +1,7 @@
 from multiprocessing.pool import ThreadPool
+from typing import Sequence
 from functools import total_ordering
 from datetime import datetime
-from typing import Sequence
 from enum import Enum
 import dataclasses
 from dataclasses import dataclass
@@ -38,24 +38,24 @@ class Protocol(Enum):
         return self.value < other.value
 
 class RecordType(Enum):
-    INVALID = 0 # Unused in this script.
-    CHANGE_CIPHER_SPEC = 20 # Unused in this script.
-    ALERT = 21
-    HANDSHAKE = 22
-    APPLICATION_DATA = 23 # Unused in this script.
+    INVALID = b'\x00' # Unused in this script.
+    CHANGE_CIPHER_SPEC = b'\x14' # Unused in this script.
+    ALERT = b'\x15'
+    HANDSHAKE = b'\x16'
+    APPLICATION_DATA = b'\x17' # Unused in this script.
 
 class HandshakeType(Enum):
-    client_hello = 1
-    server_hello = 2
-    new_session_ticket = 4
-    end_of_early_data = 5
-    encrypted_extensions = 8
-    certificate = 11
-    certificate_request = 13
-    certificate_verify = 15
-    finished = 20
-    key_update = 24
-    message_hash = 25
+    client_hello = b'\x01'
+    server_hello = b'\x02'
+    new_session_ticket = b'\x04'
+    end_of_early_data = b'\x05'
+    encrypted_extensions = b'\x08'
+    certificate = b'\x0B'
+    certificate_request = b'\x0D'
+    certificate_verify = b'\x0F'
+    finished = b'\x14'
+    key_update = b'\x18'
+    message_hash = b'\x19'
 
 @total_ordering
 class CipherSuite(Enum):
@@ -176,38 +176,38 @@ TLS1_2_AND_LOWER_CIPHER_SUITES = [
 
 class AlertLevel(Enum):
     """ Different alert levels that can be sent by the server. """
-    WARNING = 1
-    FATAL = 2
+    WARNING = b'\x01'
+    FATAL = b'\x02'
 
 class AlertDescription(Enum):
     """ Different alert messages that can be sent by the server. """
-    close_notify = 0
-    unexpected_message = 10
-    bad_record_mac = 20
-    record_overflow = 22
-    handshake_failure = 40
-    bad_certificate = 42
-    unsupported_certificate = 43
-    certificate_revoked = 44
-    certificate_expired = 45
-    certificate_unknown = 46
-    illegal_parameter = 47
-    unknown_ca = 48
-    access_denied = 49
-    decode_error = 50
-    decrypt_error = 51
-    protocol_version = 70
-    insufficient_security = 71
-    internal_error = 80
-    inappropriate_fallback = 86
-    user_canceled = 90
-    missing_extension = 109
-    unsupported_extension = 110
-    unrecognized_name = 112
-    bad_certificate_status_response = 113
-    unknown_psk_identity = 115
-    certificate_required = 116
-    no_application_protocol = 120
+    close_notify = b'\x00'
+    unexpected_message = b'\x0a'
+    bad_record_mac = b'\x14'
+    record_overflow = b'\x16'
+    handshake_failure = b'\x28'
+    bad_certificate = b'\x2a'
+    unsupported_certificate = b'\x2b'
+    certificate_revoked = b'\x2c'
+    certificate_expired = b'\x2d'
+    certificate_unknown = b'\x2e'
+    illegal_parameter = b'\x2f'
+    unknown_ca = b'\x30'
+    access_denied = b'\x31'
+    decode_error = b'\x32'
+    decrypt_error = b'\x33'
+    protocol_version = b'\x46'
+    insufficient_security = b'\x47'
+    internal_error = b'\x50'
+    inappropriate_fallback = b'\x56'
+    user_canceled = b'\x5a'
+    missing_extension = b'\x6d'
+    unsupported_extension = b'\x6e'
+    unrecognized_name = b'\x70'
+    bad_certificate_status_response = b'\x71'
+    unknown_psk_identity = b'\x73'
+    certificate_required = b'\x74'
+    no_application_protocol = b'\x78'
 
 class ServerAlertError(Exception):
     def __init__(self, level: AlertLevel, description: AlertDescription):
@@ -229,52 +229,42 @@ def try_parse_server_error(packet: bytes) -> ServerAlertError | None:
     Parses a server alert packet, or None if the packet is not an alert.
     """
     # Alert record
-    if packet[0] != RecordType.ALERT.value:
+    if packet[0:1] != RecordType.ALERT.value:
         return None
-    record_type_int, legacy_record_version, length = struct.unpack('!B2sH', packet[:5])
-    alert_level_id, alert_description_id = struct.unpack('!BB', packet[5:7])
+    record_type_int, legacy_record_version, length = struct.unpack('!c2sH', packet[:5])
+    alert_level_id, alert_description_id = struct.unpack('!cc', packet[5:7])
     return ServerAlertError(AlertLevel(alert_level_id), AlertDescription(alert_description_id))
 
 def parse_server_hello(packet: bytes) -> ServerHello:
     """
     Parses a Server Hello packet and returns the cipher suite accepted by the server.
     """
-    record_type = RecordType(packet[0])
-
     if not packet:
         raise ValueError('Empty response')
     
     if error := try_parse_server_error(packet):
         raise error
     
-    assert record_type == RecordType.HANDSHAKE
+    def parse_next(start, length: int) -> tuple[int, bytes]:
+        return start + length, packet[start:start+length]
     
-    begin_format = "!B2sHB3s2s32sB"
-    begin_length = struct.calcsize(begin_format)
-    begin_packet = packet[:begin_length]
-    (
-        record_type,
-        legacy_record_version,
-        handshake_length,
-        handshake_type_int,
-        server_hello_length,
-        server_version,
-        server_random,
-        session_id_length,
-    ) = struct.unpack(begin_format, begin_packet)
-
-    assert HandshakeType(handshake_type_int) == HandshakeType.server_hello
-
-    rest_of_pakcet = packet[begin_length+session_id_length:]
-
-    (
-        cipher_suite,
-        compression_method,
-        extensions_length,
-    ) = struct.unpack('!HBH', rest_of_pakcet[:5])
-
-    cipher_suite_start = begin_length+session_id_length
-    cipher_suite = CipherSuite(bytes(packet[cipher_suite_start:cipher_suite_start+2]))
+    start = 0
+    start, record_type = parse_next(start, 1)
+    assert record_type == RecordType.HANDSHAKE.value, record_type
+    start, legacy_record_version = parse_next(start, 2)
+    start, handshake_length = parse_next(start, 2)
+    start, handshake_type = parse_next(start, 1)
+    assert handshake_type == HandshakeType.server_hello.value, handshake_type
+    start, server_hello_length = parse_next(start, 3)
+    start, server_version = parse_next(start, 2)
+    start, server_random = parse_next(start, 32)
+    start, session_id_length = parse_next(start, 1)
+    start, session_id = parse_next(start, int.from_bytes(session_id_length, byteorder='big'))
+    start, cipher_suite_bytes = parse_next(start, 2)
+    start, compression_method = parse_next(start, 1)
+    start, extensions_length = parse_next(start, 2)
+    
+    cipher_suite = CipherSuite(cipher_suite_bytes)
     # server_version is limited to TLS 1.2, so check the cipher suite to see if it's actually TLS 1.3.
     # TODO: parse more accurate protocol version by reading the TLS 1.3 extension.
     version = Protocol.TLS1_3 if cipher_suite in TLS1_3_CIPHER_SUITES else Protocol(server_version)
