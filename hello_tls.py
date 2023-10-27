@@ -398,7 +398,7 @@ def parse_server_hello(packet: bytes) -> ServerHello:
             try:
                 group = Group(extension_data[:2])
             except ValueError:
-                logger.warning(f'Unknown group: {extension_data[:2]}')
+                logger.warning(f'Unknown group: {extension_data[:2]!r}')
                 pass
     
     cipher_suite = CipherSuite(cipher_suite_bytes)
