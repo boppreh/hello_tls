@@ -49,13 +49,13 @@ ServerScanResult(
         TLS1_0: None,
         TLS1_1: None,
         TLS1_2: ProtocolResult(
-            has_compression=True,
+            has_compression=False,
             has_cipher_suite_order=True,
             groups=[],
             cipher_suites=[TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256, ...]
         ),
         TLS1_3: ProtocolResult(
-            has_compression=True,
+            has_compression=False,
             has_cipher_suite_order=False,
             groups=[x25519],
             cipher_suites=[TLS_CHACHA20_POLY1305_SHA256, ...]
@@ -80,7 +80,7 @@ python -m hello_tls google.com
   "port": 443,
   "protocols": {
     "TLS1_3": {
-      "has_compression": true,
+      "has_compression": false,
       "has_cipher_suite_order": false,
       "groups": [
         "x25519"
@@ -92,7 +92,7 @@ python -m hello_tls google.com
       ]
     },
     "TLS1_2": {
-      "has_compression": true,
+      "has_compression": false,
       "has_cipher_suite_order": true,
       "groups": [],
       "cipher_suites": [
