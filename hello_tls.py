@@ -57,6 +57,58 @@ class HandshakeType(Enum):
     key_update = b'\x18'
     message_hash = b'\x19'
 
+class Group(Enum):
+    sect163k1 = b'\x00\x01'
+    sect163r1 = b'\x00\x02'
+    sect163r2 = b'\x00\x03'
+    sect193r1 = b'\x00\x04'
+    sect193r2 = b'\x00\x05'
+    sect233k1 = b'\x00\x06'
+    sect233r1 = b'\x00\x07'
+    sect239k1 = b'\x00\x08'
+    sect283k1 = b'\x00\x09'
+    sect283r1 = b'\x00\x0a'
+    sect409k1 = b'\x00\x0b'
+    sect409r1 = b'\x00\x0c'
+    sect571k1 = b'\x00\x0d'
+    sect571r1 = b'\x00\x0e'
+    secp160k1 = b'\x00\x0f'
+    secp160r1 = b'\x00\x10'
+    secp160r2 = b'\x00\x11'
+    secp192k1 = b'\x00\x12'
+    secp192r1 = b'\x00\x13'
+    secp224k1 = b'\x00\x14'
+    secp224r1 = b'\x00\x15'
+    secp256k1 = b'\x00\x16'
+    secp256r1 = b'\x00\x17'
+    secp384r1 = b'\x00\x18'
+    secp521r1 = b'\x00\x19'
+    brainpoolP256r1 = b'\x00\x1a'
+    brainpoolP384r1 = b'\x00\x1b'
+    brainpoolP512r1 = b'\x00\x1c'
+    x25519 = b'\x00\x1d'
+    x448 = b'\x00\x1e'
+    brainpoolP256r1tls13 = b'\x00\x1f'
+    brainpoolP384r1tls13 = b'\x00\x20'
+    brainpoolP512r1tls13 = b'\x00\x21'
+    GC256A = b'\x00\x22'
+    GC256B = b'\x00\x23'
+    GC256C = b'\x00\x24'
+    GC256D = b'\x00\x25'
+    GC512A = b'\x00\x26'
+    GC512B = b'\x00\x27'
+    GC512C = b'\x00\x28'
+    curveSM2 = b'\x00\x29'
+    ffdhe2048 = b'\x01\x00'
+    ffdhe3072 = b'\x01\x01'
+    ffdhe4096 = b'\x01\x02'
+    ffdhe6144 = b'\x01\x03'
+    ffdhe8192 = b'\x01\x04'
+    X25519Kyber768Draft00 = b'\x63\x99'
+    SecP256r1Kyber768Draft00 = b'\x63\x9a'
+    arbitrary_explicit_prime_curves = b'\xff\x01'
+    arbitrary_explicit_char2_curves = b'\xff\x02'
+
 @total_ordering
 class CipherSuite(Enum):
     # For compability.
@@ -284,6 +336,7 @@ class ServerHello:
     version: Protocol
     has_compression: bool
     cipher_suite: CipherSuite
+    group: Group | None
 
 def try_parse_server_error(packet: bytes) -> ServerAlertError | None:
     """
@@ -329,20 +382,23 @@ def parse_server_hello(packet: bytes) -> ServerHello:
     cipher_suite_bytes = parse_next(2)
     compression_method = parse_next(1)
     extensions_length = parse_next(2)
+    extensions_end = start + bytes_to_int(extensions_length)
 
     # At most TLS 1.2. Handshakes for TLS 1.3 use the supported_versions extension.
     version = Protocol(server_version)
+    group = None
 
-    while start < len(packet):
+    while start < extensions_end:
         extension_type = parse_next(2)
         extension_data_length = parse_next(2)
         extension_data = parse_next(bytes_to_int(extension_data_length))
         if extension_type == ExtensionType.supported_versions.value:
             version = Protocol(extension_data)
-        continue
+        elif extension_type == ExtensionType.key_share.value:
+            group = Group(extension_data[:2])
     
     cipher_suite = CipherSuite(cipher_suite_bytes)
-    return ServerHello(version, compression_method != 0, cipher_suite)
+    return ServerHello(version, compression_method != 0, cipher_suite, group)
 
 @dataclass
 class TlsHelloSettings:
@@ -358,6 +414,7 @@ class TlsHelloSettings:
     server_name_indication: str | None = None # Defaults to server_host if not provided.
     protocols: Sequence[Protocol] = tuple(Protocol)
     cipher_suites: Sequence[CipherSuite] = tuple(CipherSuite)
+    groups: Sequence[Group] = tuple(Group)
 
 def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
     """
@@ -415,18 +472,9 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
 
                     0x00, 0x0a,  # Extension type: supported groups (mostly EC curves).
                     *_prefix_length( # Extension data.
-                        _prefix_length(bytes([ # Supported groups list.
-                            0x00, 0x1d, # Curve "x25519".
-                            0x00, 0x17, # Curve "secp256r1".
-                            0x00, 0x1e, # Curve "x448".
-                            0x00, 0x18, # Curve "secp384r1".
-                            0x00, 0x19, # Curve "secp521r1".
-                            0x01, 0x00, # Curve "ffdhe2048".
-                            0x01, 0x01, # Curve "ffdhe3072".
-                            0x01, 0x02, # Curve "ffdhe4096".
-                            0x01, 0x03, # Curve "ffdhe6144".
-                            0x01, 0x04, # Curve "ffdhe8192".
-                        ]))
+                        _prefix_length(
+                            b''.join(group.value for group in hello_prefs.groups)
+                        )
                     ),
 
                     0x00, 0x23,  # Extension type: session ticket.
@@ -688,6 +736,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
 class ProtocolResult:
     has_compression: bool
     has_cipher_suite_order: bool
+    group: Group | None
     cipher_suites: Sequence[CipherSuite]
 
 @dataclass
@@ -747,10 +796,13 @@ def scan_server(
 
                 # Reverse cipher suite order to check if the server respect the client preferences.
                 reversed_prefs = dataclasses.replace(protocol_prefs, cipher_suites=list(reversed(suites_to_test)))
-                other_accepted_cipher_suites = enumerate_server_cipher_suites(reversed_prefs)
-                has_compression = server_hello.has_compression
-                has_cipher_suite_order = bool(other_accepted_cipher_suites) and server_hello.cipher_suite == other_accepted_cipher_suites[0]
-                result.protocols[protocol] = ProtocolResult(has_compression, has_cipher_suite_order, other_accepted_cipher_suites)
+                cipher_suites = enumerate_server_cipher_suites(reversed_prefs)
+                result.protocols[protocol] = ProtocolResult(
+                    has_compression=server_hello.has_compression,
+                    has_cipher_suite_order=bool(cipher_suites) and server_hello.cipher_suite == cipher_suites[0],
+                    group=server_hello.group,
+                    cipher_suites=cipher_suites,
+                )
 
             for protocol in protocols:
                 add_task(test_protocol, (protocol,))
