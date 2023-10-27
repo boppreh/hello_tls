@@ -209,6 +209,67 @@ class AlertDescription(Enum):
     certificate_required = b'\x74'
     no_application_protocol = b'\x78'
 
+class ExtensionType(Enum):
+    server_name = b'\x00\x00'
+    max_fragment_length = b'\x00\x01'
+    client_certificate_url = b'\x00\x02'
+    trusted_ca_keys = b'\x00\x03'
+    truncated_hmac = b'\x00\x04'
+    status_request = b'\x00\x05'
+    user_mapping = b'\x00\x06'
+    client_authz = b'\x00\x07'
+    server_authz = b'\x00\x08'
+    cert_type = b'\x00\x09'
+    supported_groups = b'\x00\x0a'
+    ec_point_formats = b'\x00\x0b'
+    srp = b'\x00\x0c'
+    signature_algorithms = b'\x00\x0d'
+    use_srtp = b'\x00\x0e'
+    heartbeat = b'\x00\x0f'
+    application_layer_protocol_negotiation = b'\x00\x10'
+    status_request_v2 = b'\x00\x11'
+    signed_certificate_timestamp = b'\x00\x12'
+    client_certificate_type = b'\x00\x13'
+    server_certificate_type = b'\x00\x14'
+    padding = b'\x00\x15'
+    encrypt_then_mac = b'\x00\x16'
+    extended_master_secret = b'\x00\x17'
+    token_binding = b'\x00\x18'
+    cached_info = b'\x00\x19'
+    tls_lts = b'\x00\x1a'
+    compress_certificate = b'\x00\x1b'
+    record_size_limit = b'\x00\x1c'
+    pwd_protect = b'\x00\x1d'
+    pwd_clear = b'\x00\x1e'
+    password_salt = b'\x00\x1f'
+    ticket_pinning = b'\x00\x20'
+    tls_cert_with_extern_psk = b'\x00\x21'
+    delegated_credential = b'\x00\x22'
+    session_ticket = b'\x00\x23'
+    TLMSP = b'\x00\x24'
+    TLMSP_proxying = b'\x00\x25'
+    TLMSP_delegate = b'\x00\x26'
+    supported_ekt_ciphers = b'\x00\x27'
+    pre_shared_key = b'\x00\x29'
+    early_data = b'\x00\x2a'
+    supported_versions = b'\x00\x2b'
+    cookie = b'\x00\x2c'
+    psk_key_exchange_modes = b'\x00\x2d'
+    certificate_authorities = b'\x00\x2f'
+    oid_filters = b'\x00\x30'
+    post_handshake_auth = b'\x00\x31'
+    signature_algorithms_cert = b'\x00\x32'
+    key_share = b'\x00\x33'
+    transparency_info = b'\x00\x34'
+    connection_id_deprecated = b'\x00\x35'
+    connection_id = b'\x00\x36'
+    external_id_hash = b'\x00\x37'
+    external_session_id = b'\x00\x38'
+    quic_transport_parameters = b'\x00\x39'
+    ticket_request = b'\x00\x3a'
+    dnssec_chain = b'\x00\x3b'
+    sequence_number_encryption_algorithms = b'\x00\x3c'
+
 class ServerAlertError(Exception):
     def __init__(self, level: AlertLevel, description: AlertDescription):
         super().__init__(self, f'Server error: {level}: {description}')
@@ -245,29 +306,42 @@ def parse_server_hello(packet: bytes) -> ServerHello:
     if error := try_parse_server_error(packet):
         raise error
     
-    def parse_next(start, length: int) -> tuple[int, bytes]:
-        return start + length, packet[start:start+length]
-    
     start = 0
-    start, record_type = parse_next(start, 1)
+    def parse_next(length: int) -> bytes:
+        nonlocal start
+        value = packet[start:start+length]
+        start += length
+        return value
+    def bytes_to_int(b: bytes) -> int:
+        return int.from_bytes(b, byteorder='big')
+    
+    record_type = parse_next(1)
     assert record_type == RecordType.HANDSHAKE.value, record_type
-    start, legacy_record_version = parse_next(start, 2)
-    start, handshake_length = parse_next(start, 2)
-    start, handshake_type = parse_next(start, 1)
+    legacy_record_version = parse_next(2)
+    handshake_length = parse_next(2)
+    handshake_type = parse_next(1)
     assert handshake_type == HandshakeType.server_hello.value, handshake_type
-    start, server_hello_length = parse_next(start, 3)
-    start, server_version = parse_next(start, 2)
-    start, server_random = parse_next(start, 32)
-    start, session_id_length = parse_next(start, 1)
-    start, session_id = parse_next(start, int.from_bytes(session_id_length, byteorder='big'))
-    start, cipher_suite_bytes = parse_next(start, 2)
-    start, compression_method = parse_next(start, 1)
-    start, extensions_length = parse_next(start, 2)
+    server_hello_length = parse_next(3)
+    server_version = parse_next(2)
+    server_random = parse_next(32)
+    session_id_length = parse_next(1)
+    session_id = parse_next(bytes_to_int(session_id_length))
+    cipher_suite_bytes = parse_next(2)
+    compression_method = parse_next(1)
+    extensions_length = parse_next(2)
+
+    # At most TLS 1.2. Handshakes for TLS 1.3 use the supported_versions extension.
+    version = Protocol(server_version)
+
+    while start < len(packet):
+        extension_type = parse_next(2)
+        extension_data_length = parse_next(2)
+        extension_data = parse_next(bytes_to_int(extension_data_length))
+        if extension_type == ExtensionType.supported_versions.value:
+            version = Protocol(extension_data)
+        continue
     
     cipher_suite = CipherSuite(cipher_suite_bytes)
-    # server_version is limited to TLS 1.2, so check the cipher suite to see if it's actually TLS 1.3.
-    # TODO: parse more accurate protocol version by reading the TLS 1.3 extension.
-    version = Protocol.TLS1_3 if cipher_suite in TLS1_3_CIPHER_SUITES else Protocol(server_version)
     return ServerHello(version, compression_method != 0, cipher_suite)
 
 @dataclass
