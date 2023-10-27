@@ -402,7 +402,11 @@ def parse_server_hello(packet: bytes) -> ServerHello:
                 pass
     
     cipher_suite = CipherSuite(cipher_suite_bytes)
-    return ServerHello(version, compression_method != 0, cipher_suite, group)
+    return ServerHello(version, compression_method != b'\x00', cipher_suite, group)
+
+class CompressionMethod(Enum):
+    NULL = b'\x00'
+    DEFLATE = b'\x01'
 
 @dataclass
 class TlsHelloSettings:
@@ -419,6 +423,7 @@ class TlsHelloSettings:
     protocols: Sequence[Protocol] = tuple(Protocol)
     cipher_suites: Sequence[CipherSuite] = tuple(CipherSuite)
     groups: Sequence[Group] = tuple(Group)
+    compression_methods: Sequence[CompressionMethod] = tuple(CompressionMethod)
 
 def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
     """
@@ -433,6 +438,8 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
     # Record and Hanshake versions have a maximum value due to ossification.
     legacy_handshake_version = min(Protocol.TLS1_2, max_protocol)
     legacy_record_version = min(Protocol.TLS1_0, max_protocol)
+    # Only NULL compression is allowed in TLS 1.3.
+    legacy_compression_methods = [CompressionMethod.NULL] if Protocol.TLS1_3 in hello_prefs.protocols else hello_prefs.compression_methods
 
     return bytes((
         0x16, # Record type: handshake.
@@ -447,8 +454,11 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
                 *_prefix_length( # Cipher suites.
                     b"".join(cipher_suite.value for cipher_suite in hello_prefs.cipher_suites)
                 ),
-                0x01,  # Legacy compression methods length.
-                0x00,  # Legacy compression method: null.
+
+                *_prefix_length( # Compression methods.
+                    b"".join(compression_method.value for compression_method in legacy_compression_methods),
+                    width_bytes=1
+                ),
                 
                 *_prefix_length(bytes([ # Extensions.
                     0x00, 0x00,  # Extension type: server_name.
