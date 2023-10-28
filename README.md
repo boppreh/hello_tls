@@ -25,6 +25,8 @@ python hello_tls.py boppreh.com
 
 ## As a library
 
+Main function signature:
+
 ```python
 def scan_server(
     host: str,
@@ -38,9 +40,19 @@ def scan_server(
     proxy: str | None = None,
     ) -> ServerScanResult:
     ...
+```
 
+Usage:
+
+```pyrhon
 from hello_tls import scan_server
-scan_server('boppreh.com')
+result = scan_server('boppreh.com')
+print(result)
+```
+
+Output:
+
+```python
 ServerScanResult(
     host='boppreh.com',
     port=443,
