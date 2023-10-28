@@ -84,7 +84,7 @@ ServerScanResult(
 ## As a command line application
 
 ```bash
-python -m hello_tls google.com
+python -m hello_tls boppreh.com
 ```
 ```json
 {
