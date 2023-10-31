@@ -782,6 +782,7 @@ class ProtocolResult:
 class ServerScanResult:
     host: str
     port: int
+    proxy: str | None
     protocols: dict[Protocol, ProtocolResult | None]
     certificate_chain: list[Certificate] | None
 
@@ -809,6 +810,7 @@ def scan_server(
     result = ServerScanResult(
         host=host,
         port=port,
+        proxy=proxy,
         protocols={p: None for p in Protocol},
         certificate_chain=None,
     )
