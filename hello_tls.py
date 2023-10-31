@@ -323,13 +323,21 @@ class ExtensionType(Enum):
     dnssec_chain = b'\x00\x3b'
     sequence_number_encryption_algorithms = b'\x00\x3c'
 
-class ServerAlertError(Exception):
+class ScanError(Exception):
+    pass
+
+class ServerAlertError(ScanError):
     def __init__(self, level: AlertLevel, description: AlertDescription):
         super().__init__(self, f'Server error: {level}: {description}')
         self.level = level
         self.description = description
 
-class BadServerResponse(Exception):
+class BadServerResponse(ScanError):
+    """ Error for server responses that can't be parsed. """
+    pass
+
+class ConnectionError(ScanError):
+    """ Class for error in resolving or connecting to a server. """
     pass
 
 @dataclass
@@ -355,7 +363,7 @@ def parse_server_hello(packet: bytes) -> ServerHello:
     Parses a Server Hello packet and returns the cipher suite accepted by the server.
     """
     if not packet:
-        raise ValueError('Empty response')
+        raise BadServerResponse('Empty response')
     
     if error := try_parse_server_error(packet):
         raise error
@@ -550,45 +558,39 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
         ]))
     ))
 
-def connect_to_proxy(conn: socket.socket, proxy:str):
-    """
-    Prepares a socket by connecting through the given HTTP proxy.
-    """
-    assert proxy.startswith('http://')
-    conn.send(f"CONNECT {proxy} HTTP/1.1\r\n\r\n".encode('ascii'))
-
-class ProxyError(Exception):
-    pass
-
 def make_socket(hello_prefs: TlsHelloSettings) -> socket.socket:
     """
     Creates and connects a socket to the target server, through the chosen proxy if any.
     """
-    if not hello_prefs.proxy:
-        return socket.create_connection((hello_prefs.server_host, hello_prefs.server_port), timeout=hello_prefs.timeout_in_seconds)
-
-    if not hello_prefs.proxy.startswith('http://'):
-        raise ProxyError("Only HTTP proxies are supported at the moment.", hello_prefs.proxy)
-    
-    proxy_host, proxy_port = parse_target(hello_prefs.proxy, 80)
-    sock = socket.create_connection((proxy_host, proxy_port), timeout=hello_prefs.timeout_in_seconds)
-
+    socket_host, socket_port = None, None # To appease the type checker.
     try:
-        sock.send(f"CONNECT {hello_prefs.server_host}:{hello_prefs.server_port} HTTP/1.1\r\nhost:{proxy_host}\r\n\r\n".encode('utf-8'))
+        if not hello_prefs.proxy:
+            socket_host, socket_port = hello_prefs.server_host, hello_prefs.server_port
+            return socket.create_connection((socket_host, socket_port), timeout=hello_prefs.timeout_in_seconds)
+
+        if not hello_prefs.proxy.startswith('http://'):
+            raise ConnectionError("Only HTTP proxies are supported at the moment.", hello_prefs.proxy)
+        
+        socket_host, socket_port = parse_target(hello_prefs.proxy, 80)
+
+        sock = socket.create_connection((socket_host, socket_port), timeout=hello_prefs.timeout_in_seconds)
+        sock.send(f"CONNECT {hello_prefs.server_host}:{hello_prefs.server_port} HTTP/1.1\r\nhost:{socket_host}\r\n\r\n".encode('utf-8'))
         sock_file = sock.makefile('r', newline='\r\n')
         line = sock_file.readline()
         if not re.fullmatch(r'HTTP/1\.[01] 200 Connection [Ee]stablished\r\n', line):
             sock_file.close()
             sock.close()
-            raise ProxyError("Proxy refused the connection: ", line)
+            raise ConnectionError("Proxy refused the connection: ", line)
         while True:
             if sock_file.readline() == '\r\n':
                 break
-    except:
-        sock.close()
-        raise
-
-    return sock
+        return sock
+    except TimeoutError as e:
+        raise ConnectionError(f"Connection to {socket_host}:{socket_port} timed out after {hello_prefs.timeout_in_seconds} seconds") from e
+    except socket.gaierror as e:
+        raise ConnectionError(f"Could not resolve host {socket_host}") from e
+    except socket.error as e:
+        raise ConnectionError(f"Could not connect to {socket_host}:{socket_port}") from e
 
 def send_hello(hello_prefs: TlsHelloSettings) -> bytes:
     """
@@ -609,11 +611,7 @@ def get_server_hello(hello_prefs: TlsHelloSettings) -> ServerHello:
         logger.info(f"Server rejected Client Hello: {error.description.name}")
         raise error
 
-    try:
-        server_hello = parse_server_hello(response)
-    except ValueError:
-        logger.info("Server sent invalid response")
-        raise BadServerResponse("Server sent invalid response", response)
+    server_hello = parse_server_hello(response)
     
     if server_hello.version not in hello_prefs.protocols:
         # Server picked a protocol we didn't ask for.
@@ -638,7 +636,7 @@ def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[Ci
         except ServerAlertError as error:
             if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure]:
                 break
-            raise error
+            raise
         accepted_cipher_suites.append(cipher_suite_picked)
         cipher_suites_to_test.remove(cipher_suite_picked)
     logger.info(f"Server accepted {len(accepted_cipher_suites)} cipher suites with protocols {hello_prefs.protocols}")
@@ -660,7 +658,7 @@ def enumerate_server_groups(hello_prefs: TlsHelloSettings) -> Sequence[Group]:
         except ServerAlertError as error:
             if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure]:
                 break
-            raise error
+            raise
         if not group_picked or group_picked not in groups_to_test:
             break
         accepted_groups.append(group_picked)
@@ -708,7 +706,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
 
     def _x509_time_to_datetime(x509_time: bytes | None) -> datetime:
         if x509_time is None:
-            raise ValueError('Timestamp cannot be None')
+            raise BadServerResponse('Timestamp cannot be None')
         return datetime.strptime(x509_time.decode('ascii'), '%Y%m%d%H%M%SZ')
     
     no_flag_by_protocol = {
@@ -733,19 +731,19 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
             try:
                 connection.do_handshake()
                 break
-            except SSL.WantReadError:
+            except SSL.WantReadError as e:
                 rd, _, _ = select.select([sock], [], [], sock.gettimeout())
                 if not rd:
-                    raise socket.timeout('select timed out')
+                    raise ConnectionError('Timed out during handshake for certificate chain') from e
                 continue
             except SSL.Error as e:
-                raise ssl.SSLError(f'bad handshake: {e}')
+                raise ConnectionError(f'OpenSSL exception during handshake for certificate chain: {e}') from e
         connection.shutdown()
 
     raw_certs = connection.get_peer_cert_chain()
 
     if raw_certs is None:
-        raise ValueError('Server did not give any certificate chain')
+        raise BadServerResponse('Server did not give any certificate chain')
     
     logger.info(f"Received {len(raw_certs)} certificates")
     
