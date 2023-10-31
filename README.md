@@ -4,7 +4,7 @@ This is a pure Python, single-file, dependency-less implementation of SSL/TLS Cl
 
 Its purpose is to quickly discover what cipher suites and SSL/TLS protocols are enabled on a server. Since the server doesn't advertise this list, instead picking from what is offered by the client, hello_tls.py sends a sequence of Client Hello with different cipher suite and protocol combinations. It usually needs less than 8 requests and 300 ms, but for servers with many cipher suites or high latency, bumping `max_workers` splits discovery over many threads.
 
-There's no actual cryptography, just sending a stream of bytes and seeing if the server reply vaguely looks ok or not. Supports TLS 1.3, TLS 1.2, TLS 1.1, TLS 1.0, and *maybe* SSLv3 (untested). Optionally, the certificate chain can be fetched and parsed, at the cost of relying on pyOpenSSL.
+There's no actual cryptography, just sending a stream of bytes and seeing if the server reply vaguely looks ok or not. Supports TLS 1.3, TLS 1.2, TLS 1.1, TLS 1.0, and SSLv3. Optionally, the certificate chain can be fetched and parsed, at the cost of relying on pyOpenSSL.
 
 ## Installation
 
@@ -25,6 +25,8 @@ python hello_tls.py boppreh.com
 
 ## As a library
 
+Main function signature:
+
 ```python
 def scan_server(
     host: str,
@@ -38,9 +40,19 @@ def scan_server(
     proxy: str | None = None,
     ) -> ServerScanResult:
     ...
+```
 
+Usage:
+
+```pyrhon
 from hello_tls import scan_server
-scan_server('boppreh.com')
+result = scan_server('boppreh.com')
+print(result)
+```
+
+Output:
+
+```python
 ServerScanResult(
     host='boppreh.com',
     port=443,
@@ -72,7 +84,7 @@ ServerScanResult(
 ## As a command line application
 
 ```bash
-python -m hello_tls google.com
+python -m hello_tls boppreh.com
 ```
 ```json
 {
