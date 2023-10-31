@@ -1,9 +1,10 @@
 from multiprocessing.pool import ThreadPool
-from typing import Sequence
+from typing import Sequence, Any
 from functools import total_ordering
 from datetime import datetime
 from enum import Enum
 import dataclasses
+import json
 from dataclasses import dataclass
 import logging
 import socket
@@ -881,6 +882,24 @@ def parse_target(target:str, default_port:int = 443) -> tuple[str, int]:
     port = url.port if url.port else default_port
     return host, port
 
+def to_json_obj(o: Any) -> Any:
+    """
+    Converts an object to a JSON-serializable structure, replacing dataclasses, enums, sets, datetimes, etc.
+    """
+    if isinstance(o, dict):
+        return {to_json_obj(key): to_json_obj(value) for key, value in o.items()}
+    elif dataclasses.is_dataclass(o):
+        return to_json_obj(dataclasses.asdict(o))
+    elif isinstance(o, set):
+        return sorted(to_json_obj(item) for item in o)
+    elif isinstance(o, (tuple, list)):
+        return [to_json_obj(item) for item in o]
+    elif isinstance(o, Enum):
+        return o.name
+    elif isinstance(o, datetime):
+        return o.isoformat()
+    return o
+
 def main():
     import os
     import argparse
@@ -929,22 +948,8 @@ def main():
         proxy=proxy,
     )
 
-    import sys, json
-    def prepare_json(o):
-        if isinstance(o, dict):
-            return {prepare_json(key): prepare_json(value) for key, value in o.items()}
-        elif dataclasses.is_dataclass(o):
-            return prepare_json(dataclasses.asdict(o))
-        elif isinstance(o, set):
-            return sorted(prepare_json(item) for item in o)
-        elif isinstance(o, (tuple, list)):
-            return [prepare_json(item) for item in o]
-        elif isinstance(o, Enum):
-            return o.name
-        elif isinstance(o, datetime):
-            return o.isoformat()
-        return o
-    json.dump(prepare_json(results), sys.stdout, indent=2)
+    import sys
+    json.dump(to_json_obj(results), sys.stdout, indent=2)
 
 if __name__ == '__main__':
     main()
