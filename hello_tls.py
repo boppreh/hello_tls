@@ -595,7 +595,7 @@ def send_hello(hello_prefs: TlsHelloSettings) -> bytes:
     logger.debug(f"Sending Client Hello to {hello_prefs.server_host}:{hello_prefs.server_port}")
     with make_socket(hello_prefs) as sock:
         sock.send(make_client_hello(hello_prefs))
-        return sock.recv(512)
+        return sock.recv(1024)
     
 def get_server_hello(hello_prefs: TlsHelloSettings) -> ServerHello:
     """
