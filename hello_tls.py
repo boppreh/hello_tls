@@ -814,11 +814,12 @@ def scan_server(
     )
 
     tasks = []
+    errors = []
     with ThreadPool(max_workers) as pool:
         logger.debug("Initializing workers")
 
         def add_task(f, args=(), ignore_errors=False):
-            task = pool.apply_async(f, args, error_callback=lambda e: None if ignore_errors else logger.error(e))
+            task = pool.apply_async(f, args, error_callback=lambda e: None if ignore_errors else errors.append(e))
             tasks.append(task)
             return task
 
@@ -863,6 +864,10 @@ def scan_server(
 
     if max_workers > len(tasks):
         logging.warning(f'Max workers is {max_workers}, but only {len(tasks)} tasks were ever created')
+
+    if errors:
+        # There'll be either a single error, or two identical errors. So we can raise just the first one.
+        raise errors[0]
 
     return result
 
