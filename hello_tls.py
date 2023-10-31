@@ -531,10 +531,6 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
                         ]))
                     ),
 
-                    0xff, 0x01, # Extension type: renegotiation_info (TLS 1.2 or lower).
-                    0x00, 0x01, # Length of extension data.
-                    0x00, # Renegotiation info length.
-
                     0x00, 0x12, # Extension type: SCT. Allow server to return signed certificate timestamp.
                     0x00, 0x00, # Length of extension data.
 
