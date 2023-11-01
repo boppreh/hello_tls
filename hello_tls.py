@@ -1,4 +1,4 @@
-from multiprocessing.pool import ThreadPool
+from multiprocessing.pool import ThreadPool, AsyncResult
 from typing import Sequence, Any
 from functools import total_ordering
 from datetime import datetime, timezone
@@ -809,18 +809,15 @@ def scan_server(
         certificate_chain=None,
     )
 
-    tasks_finished = 0
-    tasks = []
+    tasks: list[AsyncResult] = []
     errors = []
     with ThreadPool(max_workers) as pool:
         logger.debug("Initializing workers")
 
         def report_progress(e):
             if progress:
-                nonlocal tasks_finished
-                tasks_finished += 1
-                percentage = tasks_finished / len(tasks)
-                print(f'{percentage:.0%}', flush=True, file=sys.stderr)
+                finished_tasks = (1 + sum(1 for task in tasks if task.ready()))
+                print(f'{finished_tasks / len(tasks):.0%}', flush=True, file=sys.stderr)
 
         def add_task(f, args=(), ignore_errors=False):
             task = pool.apply_async(
