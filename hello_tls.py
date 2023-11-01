@@ -670,22 +670,20 @@ class Certificate:
     subject_alternative_names: list[str]
     key_type: str
     key_length_in_bits: int
+    all_key_usage: list[str] | None = dataclasses.field(init=False)
     not_before: datetime
     not_after: datetime
+    is_expired: bool = dataclasses.field(init=False)
+    days_until_expiration: int = dataclasses.field(init=False)
     signature_algorithm: str
     extensions: dict[str, str]
 
-    @property
-    def is_valid(self):
-        return self.not_before < datetime.now() < self.not_after
+    def __post_init__(self):
+        now = datetime.now(tz=timezone.utc)
+        self.is_expired = self.not_after < now
+        self.days_until_expiration = (self.not_after - now).days
 
-    @property
-    def days_until_expiration(self):
-        return (self.not_after - datetime.now()).days
-    
-    @property
-    def key_usage(self):
-        return self.extensions.get('keyUsage', '').split(', ') + self.extensions.get('extendedKeyUsage', '').split(', ')
+        self.all_key_usage = self.extensions.get('keyUsage', '').split(', ') + self.extensions.get('extendedKeyUsage', '').split(', ')
     
 def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Certificate]:
     """
