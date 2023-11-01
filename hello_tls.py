@@ -1,5 +1,5 @@
 from multiprocessing.pool import ThreadPool, AsyncResult
-from typing import Sequence, Any
+from typing import Sequence, Any, Callable
 from functools import total_ordering
 from datetime import datetime, timezone
 from enum import Enum
@@ -789,7 +789,7 @@ def scan_server(
     max_workers: int = DEFAULT_MAX_WORKERS,
     timeout_in_seconds: float | None = DEFAULT_TIMEOUT,
     proxy:str | None = None,
-    progress: bool = False,
+    progress: Callable[[int, int], None] = lambda current, total: None,
     ) -> ServerScanResult:
     """
     Scans a SSL/TLS server for supported protocols, cipher suites, and certificate chain.
@@ -814,15 +814,10 @@ def scan_server(
     with ThreadPool(max_workers) as pool:
         logger.debug("Initializing workers")
 
-        def report_progress(e):
-            if progress:
-                finished_tasks = (1 + sum(1 for task in tasks if task.ready()))
-                print(f'{finished_tasks / len(tasks):.0%}', flush=True, file=sys.stderr)
-
         def add_task(f, args=(), ignore_errors=False):
             task = pool.apply_async(
                 f, args,
-                callback=report_progress,
+                callback=lambda e: progress(1 + sum(1 for task in tasks if task.ready()), len(tasks)),
                 error_callback=lambda e: None if ignore_errors else errors.append(e)
             )
             tasks.append(task)
@@ -947,6 +942,12 @@ def main():
 
     proxy = os.environ.get('https_proxy') or os.environ.get('HTTPS_PROXY') if args.proxy is None else args.proxy
 
+    if args.progress:
+        progress = lambda current, total: print(f'{current/total:.0%}', flush=True, file=sys.stderr)
+        print('0%', flush=True, file=sys.stderr)
+    else:
+        progress = lambda current, total: None
+
     results = scan_server(
         host,
         port=port,
@@ -957,10 +958,9 @@ def main():
         max_workers=args.max_workers,
         timeout_in_seconds=args.timeout,
         proxy=proxy,
-        progress=args.progress,
+        progress=progress,
     )
 
-    import sys
     json.dump(to_json_obj(results), sys.stdout, indent=2)
 
 if __name__ == '__main__':
