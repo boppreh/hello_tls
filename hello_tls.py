@@ -3,13 +3,14 @@ from typing import Sequence, Any
 from functools import total_ordering
 from datetime import datetime, timezone
 from enum import Enum
+from dataclasses import dataclass
 import dataclasses
 import json
-from dataclasses import dataclass
 import logging
 import socket
 import struct
 import re
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -788,6 +789,7 @@ def scan_server(
     max_workers: int = DEFAULT_MAX_WORKERS,
     timeout_in_seconds: float | None = DEFAULT_TIMEOUT,
     proxy:str | None = None,
+    progress: bool = False,
     ) -> ServerScanResult:
     """
     Scans a SSL/TLS server for supported protocols, cipher suites, and certificate chain.
@@ -807,13 +809,25 @@ def scan_server(
         certificate_chain=None,
     )
 
+    tasks_finished = 0
     tasks = []
     errors = []
     with ThreadPool(max_workers) as pool:
         logger.debug("Initializing workers")
 
+        def report_progress(e):
+            if progress:
+                nonlocal tasks_finished
+                tasks_finished += 1
+                percentage = tasks_finished / len(tasks)
+                print(f'{percentage:.0%}', flush=True, file=sys.stderr)
+
         def add_task(f, args=(), ignore_errors=False):
-            task = pool.apply_async(f, args, error_callback=lambda e: None if ignore_errors else errors.append(e))
+            task = pool.apply_async(
+                f, args,
+                callback=report_progress,
+                error_callback=lambda e: None if ignore_errors else errors.append(e)
+            )
             tasks.append(task)
             return task
 
@@ -912,6 +926,7 @@ def main():
     parser.add_argument("--protocols", "-p", dest='protocols_str', default=','.join(p.name for p in Protocol), help="comma separated list of TLS/SSL protocols to test")
     parser.add_argument("--proxy", default=None, help="HTTP proxy to use for the connection, defaults to the env variable 'http_proxy' else no proxy")
     parser.add_argument("--verbose", "-v", action="count", default=0, help="increase output verbosity")
+    parser.add_argument("--progress", default=False, action=argparse.BooleanOptionalAction, help="write lines with progress percentages to stderr")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -945,6 +960,7 @@ def main():
         max_workers=args.max_workers,
         timeout_in_seconds=args.timeout,
         proxy=proxy,
+        progress=args.progress,
     )
 
     import sys
