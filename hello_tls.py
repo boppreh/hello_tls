@@ -671,6 +671,7 @@ class Certificate:
     fingerprint_sha256: str
     subject: dict[str, str]
     issuer: dict[str, str]
+    subject_alternative_names: list[str]
     key_type: str
     key_length_in_bits: int
     not_before: datetime
@@ -750,11 +751,14 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
         for i in range(raw_cert.get_extension_count()):
             extension = raw_cert.get_extension(i)
             extensions[extension.get_short_name().decode('utf-8')] = str(extension)
-        
+
+        san = re.findall(r'DNS:(.+?)(?:, |$)', extensions.get('subjectAltName', ''))
+
         nice_certs.append(Certificate(
             serial_number=str(raw_cert.get_serial_number()),
             subject=_x509_name_to_dict(raw_cert.get_subject()),
             issuer=_x509_name_to_dict(raw_cert.get_issuer()),
+            subject_alternative_names=san,
             not_before=_x509_time_to_datetime(raw_cert.get_notBefore()),
             not_after=_x509_time_to_datetime(raw_cert.get_notAfter()),
             signature_algorithm=raw_cert.get_signature_algorithm().decode('utf-8'),
