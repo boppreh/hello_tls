@@ -1,7 +1,7 @@
 from multiprocessing.pool import ThreadPool
 from typing import Sequence, Any
 from functools import total_ordering
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import dataclasses
 import json
@@ -703,7 +703,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
     def _x509_time_to_datetime(x509_time: bytes | None) -> datetime:
         if x509_time is None:
             raise BadServerResponse('Timestamp cannot be None')
-        return datetime.strptime(x509_time.decode('ascii'), '%Y%m%d%H%M%SZ')
+        return datetime.strptime(x509_time.decode('ascii'), '%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc)
     
     no_flag_by_protocol = {
         Protocol.SSLv3: SSL.OP_NO_SSLv3,
@@ -898,7 +898,7 @@ def to_json_obj(o: Any) -> Any:
     elif isinstance(o, Enum):
         return o.name
     elif isinstance(o, datetime):
-        return o.isoformat()
+        return o.isoformat(' ')
     return o
 
 def main():
