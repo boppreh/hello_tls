@@ -1,5 +1,5 @@
 from multiprocessing.pool import ThreadPool, AsyncResult
-from typing import Sequence, Any, Callable
+from typing import Sequence, Any, Callable, Optional
 from functools import total_ordering
 from datetime import datetime, timezone
 from enum import Enum
@@ -342,9 +342,9 @@ class ServerHello:
     version: Protocol
     has_compression: bool
     cipher_suite: CipherSuite
-    group: Group | None
+    group: Optional[Group]
 
-def try_parse_server_error(packet: bytes) -> ServerAlertError | None:
+def try_parse_server_error(packet: bytes) -> Optional[ServerAlertError]:
     """
     Parses a server alert packet, or None if the packet is not an alert.
     """
@@ -422,10 +422,10 @@ class TlsHelloSettings:
     """
     server_host: str
     server_port: int = 443
-    proxy: str | None = None
-    timeout_in_seconds: float | None = DEFAULT_TIMEOUT
+    proxy: Optional[str] = None
+    timeout_in_seconds: Optional[float] = DEFAULT_TIMEOUT
 
-    server_name_indication: str | None = None # Defaults to server_host if not provided.
+    server_name_indication: Optional[str] = None # Defaults to server_host if not provided.
     protocols: Sequence[Protocol] = tuple(Protocol)
     cipher_suites: Sequence[CipherSuite] = tuple(CipherSuite)
     groups: Sequence[Group] = tuple(Group)
@@ -671,7 +671,7 @@ class Certificate:
     subject_alternative_names: list[str]
     key_type: str
     key_length_in_bits: int
-    all_key_usage: list[str] | None = dataclasses.field(init=False)
+    all_key_usage: list[str] = dataclasses.field(init=False)
     not_before: datetime
     not_after: datetime
     is_expired: bool = dataclasses.field(init=False)
@@ -696,7 +696,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
     def _x509_name_to_dict(x509_name: crypto.X509Name) -> dict[str, str]:
         return {name.decode('utf-8'): value.decode('utf-8') for name, value in x509_name.get_components()}
 
-    def _x509_time_to_datetime(x509_time: bytes | None) -> datetime:
+    def _x509_time_to_datetime(x509_time: Optional[bytes]) -> datetime:
         if x509_time is None:
             raise BadServerResponse('Timestamp cannot be None')
         return datetime.strptime(x509_time.decode('ascii'), '%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc)
@@ -768,16 +768,16 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
 class ProtocolResult:
     has_compression: bool
     has_cipher_suite_order: bool
-    groups: Sequence[Group] | None
+    groups: Optional[Sequence[Group]]
     cipher_suites: Sequence[CipherSuite]
 
 @dataclass
 class ServerScanResult:
     host: str
     port: int
-    proxy: str | None
-    protocols: dict[Protocol, ProtocolResult | None]
-    certificate_chain: list[Certificate] | None
+    proxy: Optional[str]
+    protocols: dict[Protocol, Optional[ProtocolResult]]
+    certificate_chain: Optional[list[Certificate]]
 
 def scan_server(
     host: str,
@@ -785,10 +785,10 @@ def scan_server(
     protocols: Sequence[Protocol] = tuple(Protocol),
     enumerate_options: bool = True,
     fetch_cert_chain: bool = True,
-    server_name_indication: str | None = None,
+    server_name_indication: Optional[str] = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
-    timeout_in_seconds: float | None = DEFAULT_TIMEOUT,
-    proxy:str | None = None,
+    timeout_in_seconds: Optional[float] = DEFAULT_TIMEOUT,
+    proxy:Optional[str] = None,
     progress: Callable[[int, int], None] = lambda current, total: None,
     ) -> ServerScanResult:
     """
