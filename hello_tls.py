@@ -329,6 +329,10 @@ class ServerAlertError(ScanError):
         self.level = level
         self.description = description
 
+class DowngradeError(ScanError):
+    """ Error for servers that attempt to downgrade beyond supported versions. """
+    pass
+
 class BadServerResponse(ScanError):
     """ Error for server responses that can't be parsed. """
     pass
@@ -609,7 +613,7 @@ def get_server_hello(hello_prefs: TlsHelloSettings) -> ServerHello:
     if server_hello.version not in hello_prefs.protocols:
         # Server picked a protocol we didn't ask for.
         logger.info(f"Server attempted to downgrade protocol to unsupported version {server_hello.version}")
-        raise BadServerResponse(f"Server attempted to downgrade from {hello_prefs.protocols} to {server_hello.version}")
+        raise DowngradeError(f"Server attempted to downgrade from {hello_prefs.protocols} to {server_hello.version}")
     
     return server_hello
 
@@ -626,6 +630,8 @@ def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[Ci
         hello_prefs = dataclasses.replace(hello_prefs, cipher_suites=cipher_suites_to_test)
         try:
             cipher_suite_picked = get_server_hello(hello_prefs).cipher_suite
+        except DowngradeError:
+            break
         except ServerAlertError as error:
             if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure]:
                 break
@@ -835,7 +841,7 @@ def scan_server(
                     server_hello = server_hello_result.get()
                     groups = groups_result.get()
                     cipher_suites = cipher_suites_result.get()
-                except ServerAlertError:
+                except (ServerAlertError, DowngradeError):
                     return
 
                 result.protocols[protocol] = ProtocolResult(
