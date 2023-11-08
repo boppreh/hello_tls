@@ -655,7 +655,7 @@ def enumerate_server_groups(hello_prefs: TlsHelloSettings) -> Sequence[Group]:
         try:
             group_picked = get_server_hello(hello_prefs).group
         except ServerAlertError as error:
-            if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure]:
+            if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure, AlertDescription.unexpected_message]:
                 break
             raise
         if not group_picked or group_picked not in groups_to_test:
