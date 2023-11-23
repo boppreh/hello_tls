@@ -428,12 +428,12 @@ class TlsHelloSettings:
     Settings necessary to send a TLS Client Hello to a server.
     By default, all protocols and cipher suites are (claimed to be) supported.
     """
-    server_host: str
-    server_port: int = 443
+    host: str
+    port: int = 443
     proxy: Optional[str] = None
     timeout_in_seconds: Optional[float] = DEFAULT_TIMEOUT
 
-    server_name_indication: Optional[str] = None # Defaults to server_host if not provided.
+    server_name_indication: Optional[str] = None # Defaults to host if not provided.
     protocols: Sequence[Protocol] = tuple(Protocol)
     cipher_suites: Sequence[CipherSuite] = tuple(CipherSuite)
     groups: Sequence[Group] = tuple(Group)
@@ -480,7 +480,7 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
                         _prefix_length( # server_name list
                             b'\x00' + # Name type: host_name.
                             _prefix_length((
-                                hello_prefs.server_name_indication or hello_prefs.server_host
+                                hello_prefs.server_name_indication or hello_prefs.host
                             ).encode('ascii'))
                         )
                     ),
@@ -566,7 +566,7 @@ def make_socket(hello_prefs: TlsHelloSettings) -> socket.socket:
     socket_host, socket_port = None, None # To appease the type checker.
     try:
         if not hello_prefs.proxy:
-            socket_host, socket_port = hello_prefs.server_host, hello_prefs.server_port
+            socket_host, socket_port = hello_prefs.host, hello_prefs.port
             return socket.create_connection((socket_host, socket_port), timeout=hello_prefs.timeout_in_seconds)
 
         if not hello_prefs.proxy.startswith('http://'):
@@ -575,7 +575,7 @@ def make_socket(hello_prefs: TlsHelloSettings) -> socket.socket:
         socket_host, socket_port = parse_target(hello_prefs.proxy, 80)
 
         sock = socket.create_connection((socket_host, socket_port), timeout=hello_prefs.timeout_in_seconds)
-        sock.send(f"CONNECT {hello_prefs.server_host}:{hello_prefs.server_port} HTTP/1.1\r\nhost:{socket_host}\r\n\r\n".encode('utf-8'))
+        sock.send(f"CONNECT {hello_prefs.host}:{hello_prefs.port} HTTP/1.1\r\nhost:{socket_host}\r\n\r\n".encode('utf-8'))
         sock_file = sock.makefile('r', newline='\r\n')
         line = sock_file.readline()
         if not re.fullmatch(r'HTTP/1\.[01] 200 Connection [Ee]stablished\r\n', line):
@@ -597,7 +597,7 @@ def send_hello(hello_prefs: TlsHelloSettings) -> bytes:
     """
     Sends a Client Hello packet to the server based on hello_prefs, and returns the first few bytes of the server response.
     """
-    logger.debug(f"Sending Client Hello to {hello_prefs.server_host}:{hello_prefs.server_port}")
+    logger.debug(f"Sending Client Hello to {hello_prefs.host}:{hello_prefs.port}")
     with make_socket(hello_prefs) as sock:
         sock.send(make_client_hello(hello_prefs))
         return sock.recv(1024)
@@ -728,7 +728,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
         connection = SSL.Connection(context, sock)
         connection.set_connect_state()        
         # Necessary for servers that expect SNI. Otherwise expect "tlsv1 alert internal error".
-        connection.set_tlsext_host_name((hello_prefs.server_name_indication or hello_prefs.server_host).encode('utf-8'))
+        connection.set_tlsext_host_name((hello_prefs.server_name_indication or hello_prefs.host).encode('utf-8'))
         while True:
             try:
                 connection.do_handshake()
