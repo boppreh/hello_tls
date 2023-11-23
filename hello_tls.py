@@ -341,6 +341,10 @@ class ConnectionError(ScanError):
     """ Class for error in resolving or connecting to a server. """
     pass
 
+class ProxyError(ConnectionError):
+    """ Class for errors in connecting to a proxy. """
+    pass
+
 @dataclass
 class ServerHello:
     version: Protocol
@@ -566,7 +570,7 @@ def make_socket(hello_prefs: TlsHelloSettings) -> socket.socket:
             return socket.create_connection((socket_host, socket_port), timeout=hello_prefs.timeout_in_seconds)
 
         if not hello_prefs.proxy.startswith('http://'):
-            raise ConnectionError("Only HTTP proxies are supported at the moment.", hello_prefs.proxy)
+            raise ProxyError("Only HTTP proxies are supported at the moment.", hello_prefs.proxy)
         
         socket_host, socket_port = parse_target(hello_prefs.proxy, 80)
 
@@ -577,7 +581,7 @@ def make_socket(hello_prefs: TlsHelloSettings) -> socket.socket:
         if not re.fullmatch(r'HTTP/1\.[01] 200 Connection [Ee]stablished\r\n', line):
             sock_file.close()
             sock.close()
-            raise ConnectionError("Proxy refused the connection: ", line)
+            raise ProxyError("Proxy refused the connection: ", line)
         while True:
             if sock_file.readline() == '\r\n':
                 break
