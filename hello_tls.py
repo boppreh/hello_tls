@@ -1,5 +1,6 @@
 from multiprocessing.pool import ThreadPool, AsyncResult
 from typing import Sequence, Any, Callable, Optional
+from collections.abc import Iterator
 from functools import total_ordering
 from datetime import datetime, timezone
 from enum import Enum
@@ -60,6 +61,8 @@ class HandshakeType(Enum):
     message_hash = b'\x19'
 
 class Group(Enum):
+    def __repr__(self):
+        return self.name
     sect163k1 = b'\x00\x01'
     sect163r1 = b'\x00\x02'
     sect163r2 = b'\x00\x03'
@@ -621,29 +624,40 @@ def get_server_hello(hello_prefs: TlsHelloSettings) -> ServerHello:
     
     return server_hello
 
-def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[CipherSuite]:
+def iterate_server_options(hello_prefs: TlsHelloSettings, client_option_name: str, server_option_name: str) -> Iterator[Any]:
     """
-    Given a list of cipher suites to test, sends a sequence of Client Hello packets to the server,
-    removing the accepted cipher suite from the list each time.
-    Returns a list of all cipher suites the server accepted.
+    Enumerates what values of an option are accepted by the server, by sending Client Hello packets sequentially with ever reducing options, until it refuses the handshake. Yields the accepted option each time.
     """
-    logger.info(f"Testing support of {len(hello_prefs.cipher_suites)} cipher suites with protocols {hello_prefs.protocols}")
-    cipher_suites_to_test = list(hello_prefs.cipher_suites)
-    accepted_cipher_suites = []
-    while cipher_suites_to_test:
-        hello_prefs = dataclasses.replace(hello_prefs, cipher_suites=cipher_suites_to_test)
+    options_to_offer = list(getattr(hello_prefs, client_option_name))
+    logger.info(f"Testing support of {len(options_to_offer)} {client_option_name} with protocols {hello_prefs.protocols}")
+    while options_to_offer:
         try:
-            cipher_suite_picked = get_server_hello(hello_prefs).cipher_suite
+            server_hello = get_server_hello(dataclasses.replace(hello_prefs, **{client_option_name: options_to_offer}))
         except DowngradeError:
             break
         except ServerAlertError as error:
             if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure]:
                 break
             raise
-        accepted_cipher_suites.append(cipher_suite_picked)
-        cipher_suites_to_test.remove(cipher_suite_picked)
-    logger.info(f"Server accepted {len(accepted_cipher_suites)} cipher suites with protocols {hello_prefs.protocols}")
-    return accepted_cipher_suites
+
+        accepted_option = getattr(server_hello, server_option_name)
+        if accepted_option not in options_to_offer:
+            # When enumerating groups, the server can refuse all groups and still accept the handshake (group=None),
+            # or accept a group that we didn't offer (e.g. Caddy 2.7.5 with group x25519).
+            break
+        logger.info(f"Server accepted {server_option_name} {accepted_option}")
+        options_to_offer.remove(accepted_option)
+        yield accepted_option
+
+    logger.debug(f"Server accepted {client_option_name} {sorted(set(getattr(hello_prefs, client_option_name)) - set(options_to_offer))} and rejected {options_to_offer}.")
+
+def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[CipherSuite]:
+    """
+    Given a list of cipher suites to test, sends a sequence of Client Hello packets to the server,
+    removing the accepted cipher suite from the list each time.
+    Returns a list of all cipher suites the server accepted.
+    """
+    return list(iterate_server_options(hello_prefs, 'cipher_suites', 'cipher_suite'))
 
 def enumerate_server_groups(hello_prefs: TlsHelloSettings) -> Sequence[Group]:
     """
@@ -651,23 +665,7 @@ def enumerate_server_groups(hello_prefs: TlsHelloSettings) -> Sequence[Group]:
     removing the accepted group from the list each time.
     Returns a list of all groups the server accepted.
     """
-    logger.info(f"Testing support of {len(hello_prefs.cipher_suites)} groups with protocols {hello_prefs.protocols}")
-    groups_to_test = list(hello_prefs.groups)
-    accepted_groups = []
-    while groups_to_test:
-        hello_prefs = dataclasses.replace(hello_prefs, groups=groups_to_test)
-        try:
-            group_picked = get_server_hello(hello_prefs).group
-        except ServerAlertError as error:
-            if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure, AlertDescription.unexpected_message]:
-                break
-            raise
-        if not group_picked or group_picked not in groups_to_test:
-            break
-        accepted_groups.append(group_picked)
-        groups_to_test.remove(group_picked)
-    logger.info(f"Server accepted {len(accepted_groups)} cipher suites with protocols {hello_prefs.protocols}")
-    return accepted_groups
+    return list(iterate_server_options(hello_prefs, 'groups', 'group'))
 
 @dataclass
 class Certificate:
