@@ -694,7 +694,8 @@ class Certificate:
         self.is_expired = self.not_after < now
         self.days_until_expiration = (self.not_after - now).days
 
-        self.all_key_usage = self.extensions.get('keyUsage', '').split(', ') + self.extensions.get('extendedKeyUsage', '').split(', ')
+        all_key_usage_str = self.extensions.get('keyUsage', '') + ', ' + self.extensions.get('extendedKeyUsage', '')
+        self.all_key_usage = [ku for ku in all_key_usage_str.split(', ') if ku]
     
 def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Certificate]:
     """
