@@ -1,5 +1,5 @@
 from multiprocessing.pool import ThreadPool, AsyncResult
-from typing import Sequence, Any, Callable, Optional
+from typing import Sequence, Any, Callable, Optional, List
 from collections.abc import Iterator
 from functools import total_ordering
 from datetime import datetime, timezone
@@ -624,15 +624,21 @@ def get_server_hello(hello_prefs: TlsHelloSettings) -> ServerHello:
     
     return server_hello
 
-def iterate_server_options(hello_prefs: TlsHelloSettings, client_option_name: str, server_option_name: str) -> Iterator[Any]:
+def _iterate_hellos(hello_prefs: TlsHelloSettings, request_option: str, response_option: str, on_response: Callable[[ServerHello], None] = lambda s: None) -> Iterator[Any]:
     """
-    Enumerates what values of an option are accepted by the server, by sending Client Hello packets sequentially with ever reducing options, until it refuses the handshake. Yields the accepted option each time.
+    Continually sends Client Hello packets to the server, removing the `response_option` from the list of options each time,
+    until the server rejects the handshake.
     """
-    options_to_offer = list(getattr(hello_prefs, client_option_name))
-    logger.info(f"Testing support of {len(options_to_offer)} {client_option_name} with protocols {hello_prefs.protocols}")
-    while options_to_offer:
+    # We'll be mutating the list of options, so make a copy.
+    options_to_test = list(getattr(hello_prefs, request_option))
+    hello_prefs = dataclasses.replace(hello_prefs, **{request_option: options_to_test})
+
+    logger.info(f"Enumerating server {response_option} with {len(options_to_test)} options and protocols {hello_prefs.protocols}")
+
+    while options_to_test:
         try:
-            server_hello = get_server_hello(dataclasses.replace(hello_prefs, **{client_option_name: options_to_offer}))
+            server_hello = get_server_hello(hello_prefs)
+            on_response(server_hello)
         except DowngradeError:
             break
         except ServerAlertError as error:
@@ -640,32 +646,29 @@ def iterate_server_options(hello_prefs: TlsHelloSettings, client_option_name: st
                 break
             raise
 
-        accepted_option = getattr(server_hello, server_option_name)
-        if accepted_option not in options_to_offer:
+        accepted_option = getattr(server_hello, response_option)
+        if accepted_option is None or accepted_option not in options_to_test:
             # When enumerating groups, the server can refuse all groups and still accept the handshake (group=None),
             # or accept a group that we didn't offer (e.g. Caddy 2.7.5 with group x25519).
             break
-        logger.info(f"Server accepted {server_option_name} {accepted_option}")
-        options_to_offer.remove(accepted_option)
+        options_to_test.remove(accepted_option)
         yield accepted_option
 
-    logger.debug(f"Server accepted {client_option_name} {sorted(set(getattr(hello_prefs, client_option_name)) - set(options_to_offer))} and rejected {options_to_offer}.")
-
-def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings) -> Sequence[CipherSuite]:
+def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings, on_response: Callable[[ServerHello], None] = lambda s: None) -> Sequence[CipherSuite]:
     """
     Given a list of cipher suites to test, sends a sequence of Client Hello packets to the server,
     removing the accepted cipher suite from the list each time.
     Returns a list of all cipher suites the server accepted.
     """
-    return list(iterate_server_options(hello_prefs, 'cipher_suites', 'cipher_suite'))
+    return list(_iterate_hellos(hello_prefs, 'cipher_suites', 'cipher_suite', on_response))
 
-def enumerate_server_groups(hello_prefs: TlsHelloSettings) -> Sequence[Group]:
+def enumerate_server_groups(hello_prefs: TlsHelloSettings, on_response: Callable[[ServerHello], None] = lambda s: None) -> Sequence[Group]:
     """
     Given a list of groups to test, sends a sequence of Client Hello packets to the server,
     removing the accepted group from the list each time.
     Returns a list of all groups the server accepted.
     """
-    return list(iterate_server_options(hello_prefs, 'groups', 'group'))
+    return list(_iterate_hellos(hello_prefs, 'groups', 'group', on_response))
 
 @dataclass
 class Certificate:
@@ -777,8 +780,14 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
 class ProtocolResult:
     has_compression: bool
     has_cipher_suite_order: bool
-    groups: Optional[Sequence[Group]]
-    cipher_suites: Sequence[CipherSuite]
+    groups: List[Group]
+    cipher_suites: List[CipherSuite]
+
+    def __post_init__(self):
+        # Internal fields to store every ServerHello seen during cipher suite and group enumeration.
+        # Used by the scan to detect compression and cipher suite order without additional handshakes.
+        self._cipher_suite_hellos: List[ServerHello] = []
+        self._group_hellos: List[ServerHello] = []
 
 @dataclass
 class ServerScanResult:
@@ -803,80 +812,66 @@ def scan_server(
     """
     Scans a SSL/TLS server for supported protocols, cipher suites, and certificate chain.
 
-    `fetch_certificate_chain` can be used to load the certificate chain, at the cost of using pyOpenSSL.
+    `fetch_cert_chain` can be used to load the certificate chain, at the cost of using pyOpenSSL.
 
     Runs scans in parallel to speed up the process, with up to `max_workers` threads connecting at the same time.
     """
     logger.info(f"Scanning {host}:{port}")
     hello_prefs = TlsHelloSettings(host, port, proxy, timeout_in_seconds, server_name_indication=server_name_indication, protocols=protocols)
 
+    tmp_certificate_chain = []
+    tmp_protocol_results = {p: ProtocolResult(False, False, [], []) for p in Protocol}
+
+    with ThreadPool(max_workers) as pool:
+        logger.debug("Initializing workers")
+
+        tasks: Sequence[Callable[[], None]] = []
+
+        if enumerate_options:
+            def scan_protocol(protocol):
+                protocol_result = tmp_protocol_results[protocol]
+                suites_to_test = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
+
+                cipher_suite_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=suites_to_test)
+                # Save the cipher suites to protocol results, and store each Server Hello for post-processing of other options.
+                tasks.append(lambda: protocol_result.cipher_suites.extend(enumerate_server_cipher_suites(cipher_suite_prefs, protocol_result._cipher_suite_hellos.append)))
+
+                # Submit reversed list of cipher suites when checking for groups, to detect servers that respect user cipher suite order.
+                group_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=reversed(suites_to_test))
+                tasks.append(lambda: protocol_result.groups.extend(enumerate_server_groups(group_prefs, protocol_result._group_hellos.append)))
+
+            for protocol in protocols:
+                # Must be extracted to a function to avoid late binding in task lambdas.
+                scan_protocol(protocol)
+
+        if fetch_cert_chain:
+            tasks.append(lambda: tmp_certificate_chain.extend(get_server_certificate_chain(hello_prefs)))
+
+        if max_workers > len(tasks):
+            logging.warning(f'Max workers is {max_workers}, but only {len(tasks)} tasks were ever created')
+
+        # Process tasks out of order, wait for all of them to finish, and stop on first exception.
+        for i, _ in enumerate(pool.imap_unordered(lambda t: t(), tasks)):
+            progress(i+1, len(tasks))
+
     result = ServerScanResult(
         host=host,
         port=port,
         proxy=proxy,
-        protocols={p: None for p in Protocol},
-        certificate_chain=None,
+        protocols={},
+        certificate_chain=tmp_certificate_chain if tmp_certificate_chain is not None else None,
     )
 
-    tasks: list[AsyncResult] = []
-    errors = []
-    with ThreadPool(max_workers) as pool:
-        logger.debug("Initializing workers")
-
-        def add_task(f, args=(), ignore_errors=False):
-            task = pool.apply_async(
-                f, args,
-                callback=lambda e: progress(1 + sum(1 for task in tasks if task.ready()), len(tasks)),
-                error_callback=lambda e: None if ignore_errors else errors.append(e)
-            )
-            tasks.append(task)
-            return task
-
-        if fetch_cert_chain:
-            add_task(lambda: result.__setattr__(
-                'certificate_chain',
-                get_server_certificate_chain(hello_prefs)
-            ))
-
-        if enumerate_options:
-            def save_protocol_results(server_hello_result, groups_result, cipher_suites_result, protocol):
-                try:
-                    server_hello = server_hello_result.get()
-                    groups = groups_result.get()
-                    cipher_suites = cipher_suites_result.get()
-                except (ServerAlertError, DowngradeError):
-                    return
-
-                result.protocols[protocol] = ProtocolResult(
-                    has_compression=server_hello.has_compression,
-                    has_cipher_suite_order=bool(cipher_suites) and server_hello.cipher_suite == cipher_suites[0],
-                    groups=groups,
-                    cipher_suites=cipher_suites,
-                )
-
-            for protocol in protocols:
-                suites_to_test = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
-                protocol_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=suites_to_test)
-                reversed_prefs = dataclasses.replace(protocol_prefs, cipher_suites=list(reversed(suites_to_test)))
-                
-                # Create async tasks for each category of test.
-                server_hello_result = add_task(get_server_hello, (protocol_prefs,), ignore_errors=True)
-                groups_result = add_task(enumerate_server_groups, (protocol_prefs,), ignore_errors=True)
-                # Reverse cipher suite order to check if the server respect the client preferences.
-                cipher_suites_result = add_task(enumerate_server_cipher_suites, (reversed_prefs,), ignore_errors=True)
-
-                # And schedule an async task to wait for the results and save them.
-                add_task(save_protocol_results, (server_hello_result, groups_result, cipher_suites_result, protocol))
-
-        pool.close()
-        pool.join()
-
-    if max_workers > len(tasks):
-        logging.warning(f'Max workers is {max_workers}, but only {len(tasks)} tasks were ever created')
-
-    if errors:
-        # There'll be either a single error, or two identical errors. So we can raise just the first one.
-        raise errors[0]
+    # Finish processing the Server Hellos to detect compression and cipher suite order.
+    for protocol, protocol_result in tmp_protocol_results.items():
+        if protocol_result.cipher_suites:
+            protocol_result.has_compression = protocol_result._cipher_suite_hellos[0].has_compression
+            # The cipher suites in cipher_suite_hellos and group_hellos were sent in reversed order.
+            # If the server accepted different cipher suites, then we know it respects the client order.
+            protocol_result.has_cipher_suite_order = bool(protocol_result._cipher_suite_hellos) and protocol_result._cipher_suite_hellos[0].cipher_suite == protocol_result._group_hellos[0].cipher_suite
+            result.protocols[protocol] = protocol_result
+        else:
+            result.protocols[protocol] = None
 
     return result
 
