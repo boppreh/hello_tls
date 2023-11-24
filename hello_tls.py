@@ -17,10 +17,8 @@ logger = logging.getLogger(__name__)
 
 # Default socket connection timeout, in seconds.
 DEFAULT_TIMEOUT: float = 2
-# Default number of workers/threads/concurrent connectiosn to use.
+# Default number of workers/threads/concurrent connections to use.
 DEFAULT_MAX_WORKERS: int = 6
-# Maximum number of cipher suite groups to divide when enumerating.
-MAX_WORKERS_PER_PROTOCOL: int = 3
 
 @total_ordering
 class Protocol(Enum):
