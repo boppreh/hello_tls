@@ -108,9 +108,18 @@ class Group(Enum):
     ffdhe6144 = b'\x01\x03'
     ffdhe8192 = b'\x01\x04'
     X25519Kyber768Draft00 = b'\x63\x99'
+    X25519Kyber768Draft00_obsolete = b'\xfe\x31'
+    X25519Kyber512Draft00 = b'\xfe\x30'
     SecP256r1Kyber768Draft00 = b'\x63\x9a'
     arbitrary_explicit_prime_curves = b'\xff\x01'
     arbitrary_explicit_char2_curves = b'\xff\x02'
+
+POST_QUANTUM_GROUPS = [
+    Group.X25519Kyber768Draft00,
+    Group.X25519Kyber768Draft00_obsolete,
+    Group.X25519Kyber512Draft00,
+    Group.SecP256r1Kyber768Draft00,
+]
 
 @total_ordering
 class CipherSuite(Enum):
@@ -779,6 +788,7 @@ def get_server_certificate_chain(hello_prefs: TlsHelloSettings) -> Sequence[Cert
 class ProtocolResult:
     has_compression: bool
     has_cipher_suite_order: bool
+    has_post_quantum: bool
     groups: List[Group]
     cipher_suites: List[CipherSuite]
 
@@ -819,7 +829,7 @@ def scan_server(
     hello_prefs = TlsHelloSettings(host, port, proxy, timeout_in_seconds, server_name_indication=server_name_indication, protocols=protocols)
 
     tmp_certificate_chain = []
-    tmp_protocol_results = {p: ProtocolResult(False, False, [], []) for p in Protocol}
+    tmp_protocol_results = {p: ProtocolResult(False, False, False, [], []) for p in Protocol}
 
     with ThreadPool(max_workers) as pool:
         logger.debug("Initializing workers")
@@ -868,6 +878,7 @@ def scan_server(
             # The cipher suites in cipher_suite_hellos and group_hellos were sent in reversed order.
             # If the server accepted different cipher suites, then we know it respects the client order.
             protocol_result.has_cipher_suite_order = bool(protocol_result._cipher_suite_hellos) and protocol_result._cipher_suite_hellos[0].cipher_suite == protocol_result._group_hellos[0].cipher_suite
+            protocol_result.has_post_quantum = any(group in POST_QUANTUM_GROUPS for group in protocol_result.groups)
             result.protocols[protocol] = protocol_result
         else:
             result.protocols[protocol] = None
