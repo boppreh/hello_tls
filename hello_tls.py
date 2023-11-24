@@ -624,7 +624,7 @@ def get_server_hello(hello_prefs: TlsHelloSettings) -> ServerHello:
     
     return server_hello
 
-def _iterate_hellos(hello_prefs: TlsHelloSettings, request_option: str, response_option: str, on_response: Callable[[ServerHello], None] = lambda s: None) -> Iterator[Any]:
+def _iterate_server_option(hello_prefs: TlsHelloSettings, request_option: str, response_option: str, on_response: Callable[[ServerHello], None] = lambda s: None) -> Iterator[Any]:
     """
     Continually sends Client Hello packets to the server, removing the `response_option` from the list of options each time,
     until the server rejects the handshake.
@@ -637,6 +637,7 @@ def _iterate_hellos(hello_prefs: TlsHelloSettings, request_option: str, response
 
     while options_to_test:
         try:
+            logger.debug(f"Offering {len(options_to_test)} {response_option} over {hello_prefs.protocols}: {options_to_test}")
             server_hello = get_server_hello(hello_prefs)
             on_response(server_hello)
         except DowngradeError:
@@ -660,7 +661,7 @@ def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings, on_response: C
     removing the accepted cipher suite from the list each time.
     Returns a list of all cipher suites the server accepted.
     """
-    return list(_iterate_hellos(hello_prefs, 'cipher_suites', 'cipher_suite', on_response))
+    return list(_iterate_server_option(hello_prefs, 'cipher_suites', 'cipher_suite', on_response))
 
 def enumerate_server_groups(hello_prefs: TlsHelloSettings, on_response: Callable[[ServerHello], None] = lambda s: None) -> Sequence[Group]:
     """
@@ -668,7 +669,7 @@ def enumerate_server_groups(hello_prefs: TlsHelloSettings, on_response: Callable
     removing the accepted group from the list each time.
     Returns a list of all groups the server accepted.
     """
-    return list(_iterate_hellos(hello_prefs, 'groups', 'group', on_response))
+    return list(_iterate_server_option(hello_prefs, 'groups', 'group', on_response))
 
 @dataclass
 class Certificate:
@@ -837,7 +838,7 @@ def scan_server(
                 tasks.append(lambda: protocol_result.cipher_suites.extend(enumerate_server_cipher_suites(cipher_suite_prefs, protocol_result._cipher_suite_hellos.append)))
 
                 # Submit reversed list of cipher suites when checking for groups, to detect servers that respect user cipher suite order.
-                group_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=reversed(suites_to_test))
+                group_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=list(reversed(suites_to_test)))
                 tasks.append(lambda: protocol_result.groups.extend(enumerate_server_groups(group_prefs, protocol_result._group_hellos.append)))
 
             for protocol in protocols:
