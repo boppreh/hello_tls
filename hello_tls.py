@@ -638,7 +638,8 @@ def _iterate_server_option(hello_prefs: TlsHelloSettings, request_option: str, r
     """
     # We'll be mutating the list of options, so make a copy.
     options_to_test = list(getattr(hello_prefs, request_option))
-    hello_prefs = dataclasses.replace(hello_prefs, **{request_option: options_to_test})
+    # TODO: figure out how to have mypy accept this line.
+    hello_prefs = dataclasses.replace(hello_prefs, **{request_option: options_to_test}) # type: ignore
 
     logger.info(f"Enumerating server {response_option} with {len(options_to_test)} options and protocols {hello_prefs.protocols}")
 
@@ -828,7 +829,7 @@ def scan_server(
     logger.info(f"Scanning {host}:{port}")
     hello_prefs = TlsHelloSettings(host, port, proxy, timeout_in_seconds, server_name_indication=server_name_indication, protocols=protocols)
 
-    tmp_certificate_chain = []
+    tmp_certificate_chain: List[Certificate] = []
     tmp_protocol_results = {p: ProtocolResult(False, False, False, [], []) for p in Protocol}
 
     with ThreadPool(max_workers) as pool:
