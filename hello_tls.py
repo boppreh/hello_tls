@@ -824,7 +824,7 @@ def scan_server(
     with ThreadPool(max_workers) as pool:
         logger.debug("Initializing workers")
 
-        tasks: Sequence[Callable[[], None]] = []
+        tasks: List[Callable[[], None]] = []
 
         if enumerate_options:
             def scan_protocol(protocol):
