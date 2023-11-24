@@ -1,5 +1,5 @@
-from multiprocessing.pool import ThreadPool, AsyncResult
-from typing import Sequence, Any, Callable, Optional, List
+from multiprocessing.pool import ThreadPool
+from typing import Sequence, Any, Callable, Optional, List, Tuple
 from collections.abc import Iterator
 from functools import total_ordering
 from datetime import datetime, timezone
@@ -29,8 +29,6 @@ class Protocol(Enum):
     TLS1_0 = b"\x03\x01"
     SSLv3 = b"\x03\x00"
 
-    def __str__(self):
-        return self.name
     def __repr__(self):
         return self.name
     def __lt__(self, other):
@@ -52,15 +50,26 @@ class HandshakeType(Enum):
     end_of_early_data = b'\x05'
     encrypted_extensions = b'\x08'
     certificate = b'\x0B'
+    server_key_exchange = b'\x0C'
     certificate_request = b'\x0D'
+    server_hello_done = b'\x0E'
     certificate_verify = b'\x0F'
     finished = b'\x14'
+    certificate_status = b'\x16'
     key_update = b'\x18'
     message_hash = b'\x19'
 
 class Group(Enum):
+    def __new__(cls, value, *rest, **kwds):
+        obj = object.__new__(cls)
+        obj._value_ = value
+        return obj
+    # Annotate each group with whether it's a PQ group.
+    def __init__(self, _: bytes, is_pq: bool = False):
+        self.is_pq = is_pq
     def __repr__(self):
         return self.name
+    
     sect163k1 = b'\x00\x01'
     sect163r1 = b'\x00\x02'
     sect163r2 = b'\x00\x03'
@@ -107,31 +116,119 @@ class Group(Enum):
     ffdhe4096 = b'\x01\x02'
     ffdhe6144 = b'\x01\x03'
     ffdhe8192 = b'\x01\x04'
-    X25519Kyber768Draft00 = b'\x63\x99'
-    X25519Kyber768Draft00_obsolete = b'\xfe\x31'
-    X25519Kyber512Draft00 = b'\xfe\x30'
-    SecP256r1Kyber768Draft00 = b'\x63\x9a'
     arbitrary_explicit_prime_curves = b'\xff\x01'
     arbitrary_explicit_char2_curves = b'\xff\x02'
 
-POST_QUANTUM_GROUPS = [
-    Group.X25519Kyber768Draft00,
-    Group.X25519Kyber768Draft00_obsolete,
-    Group.X25519Kyber512Draft00,
-    Group.SecP256r1Kyber768Draft00,
-]
+    # Somewhat common post-quantum groups, not yet standardized:
+    X25519Kyber768Draft00 = b'\x63\x99', True
+    X25519Kyber768Draft00_obsolete = b'\xfe\x31', True
+    X25519Kyber512Draft00 = b'\xfe\x30', True
+    SecP256r1Kyber768Draft00 = b'\x63\x9a', True
 
-@total_ordering
+    # Long list of unusual post-quantum groups from liboqs:
+    # https://github.com/open-quantum-safe/oqs-provider/blob/main/ALGORITHMS.md?plain=1#L13
+    frodo640aes = b'\x02\x00', True
+    p256_frodo640aes = b'\x2F\x00', True
+    x25519_frodo640aes = b'\x2F\x80', True
+    frodo640shake = b'\x02\x01', True
+    p256_frodo640shake = b'\x2F\x01', True
+    x25519_frodo640shake = b'\x2F\x81', True
+    frodo976aes = b'\x02\x02', True
+    p384_frodo976aes = b'\x2F\x02', True
+    x448_frodo976aes = b'\x2F\x82', True
+    frodo976shake = b'\x02\x03', True
+    p384_frodo976shake = b'\x2F\x03', True
+    x448_frodo976shake = b'\x2F\x83', True
+    frodo1344aes = b'\x02\x04', True
+    p521_frodo1344aes = b'\x2F\x04', True
+    frodo1344shake = b'\x02\x05', True
+    p521_frodo1344shake = b'\x2F\x05', True
+    kyber512 = b'\x02\x3A', True
+    p256_kyber512 = b'\x2F\x3A', True
+    x25519_kyber512 = b'\x2F\x39', True
+    kyber768 = b'\x02\x3C', True
+    p384_kyber768 = b'\x2F\x3C', True
+    x448_kyber768 = b'\x2F\x90', True
+    kyber1024 = b'\x02\x3D', True
+    p521_kyber1024 = b'\x2F\x3D', True
+    bikel1 = b'\x02\x41', True
+    p256_bikel1 = b'\x2F\x41', True
+    x25519_bikel1 = b'\x2F\xAE', True
+    bikel3 = b'\x02\x42', True
+    p384_bikel3 = b'\x2F\x42', True
+    x448_bikel3 = b'\x2F\xAF', True
+    bikel5 = b'\x02\x43', True
+    p521_bikel5 = b'\x2F\x43', True
+    hqc128 = b'\x02\x2C', True
+    p256_hqc128 = b'\x2F\x2C', True
+    x25519_hqc128 = b'\x2F\xAC', True
+    hqc192 = b'\x02\x2D', True
+    p384_hqc192 = b'\x2F\x2D', True
+    x448_hqc192 = b'\x2F\xAD', True
+    hqc256 = b'\x02\x2E', True
+    p521_hqc256 = b'\x2F\x2E', True
+    dilithium2 = b'\xfe\xa0', True
+    p256_dilithium2 = b'\xfe\xa1', True
+    rsa3072_dilithium2 = b'\xfe\xa2', True
+    dilithium3 = b'\xfe\xa3', True
+    p384_dilithium3 = b'\xfe\xa4', True
+    dilithium5 = b'\xfe\xa5', True
+    p521_dilithium5 = b'\xfe\xa6', True
+    falcon512 = b'\xfe\xae', True
+    p256_falcon512 = b'\xfe\xaf', True
+    rsa3072_falcon512 = b'\xfe\xb0', True
+    falcon1024 = b'\xfe\xb1', True
+    p521_falcon1024 = b'\xfe\xb2', True
+    sphincssha2128fsimple = b'\xfe\xb3', True
+    p256_sphincssha2128fsimple = b'\xfe\xb4', True
+    rsa3072_sphincssha2128fsimple = b'\xfe\xb5', True
+    sphincssha2128ssimple = b'\xfe\xb6', True
+    p256_sphincssha2128ssimple = b'\xfe\xb7', True
+    rsa3072_sphincssha2128ssimple = b'\xfe\xb8', True
+    sphincssha2192fsimple = b'\xfe\xb9', True
+    p384_sphincssha2192fsimple = b'\xfe\xba', True
+    sphincssha2192ssimple = b'\xfe\xbb', True
+    p384_sphincssha2192ssimple = b'\xfe\xbc', True
+    sphincssha2256fsimple = b'\xfe\xbd', True
+    p521_sphincssha2256fsimple = b'\xfe\xbe', True
+    sphincssha2256ssimple = b'\xfe\xc0', True
+    p521_sphincssha2256ssimple = b'\xfe\xc1', True
+    sphincsshake128fsimple = b'\xfe\xc2', True
+    p256_sphincsshake128fsimple = b'\xfe\xc3', True
+    rsa3072_sphincsshake128fsimple = b'\xfe\xc4', True
+    sphincsshake128ssimple = b'\xfe\xc5', True
+    p256_sphincsshake128ssimple = b'\xfe\xc6', True
+    rsa3072_sphincsshake128ssimple = b'\xfe\xc7', True
+    sphincsshake192fsimple = b'\xfe\xc8', True
+    p384_sphincsshake192fsimple = b'\xfe\xc9', True
+    sphincsshake192ssimple = b'\xfe\xca', True
+    p384_sphincsshake192ssimple = b'\xfe\xcb', True
+    sphincsshake256fsimple = b'\xfe\xcc', True
+    p521_sphincsshake256fsimple = b'\xfe\xcd', True
+    sphincsshake256ssimple = b'\xfe\xce', True
+    p521_sphincsshake256ssimple = b'\xfe\xcf', True
+
 class CipherSuite(Enum):
+    def __repr__(self):
+        return self.name
+    def __new__(cls, value, *rest, **kwds):
+        obj = object.__new__(cls)
+        obj._value_ = value
+        return obj
+    # Annotate each cipher suite with the protocols it's supported at.
+    # Default to all but TLS 1.3, because that's the most common.
+    def __init__(self, _: bytes, protocols: Sequence[Protocol] = (Protocol.SSLv3, Protocol.TLS1_0, Protocol.TLS1_1, Protocol.TLS1_2)):
+        self.protocols = protocols
+
     # Pseudo cipher suite, not actually picked.
     #TLS_EMPTY_RENEGOTIATION_INFO_SCSV = b"\x00\xff"
 
     # TLS 1.3 cipher suites.
-    TLS_AES_128_GCM_SHA256 = b"\x13\x01"
-    TLS_AES_256_GCM_SHA384 = b"\x13\x02"
-    TLS_CHACHA20_POLY1305_SHA256 = b"\x13\x03"
-    TLS_AES_128_CCM_SHA256 = b"\x13\x04"
-    TLS_AES_128_CCM_8_SHA256 = b"\x13\x05"
+    TLS_AES_128_GCM_SHA256 = b"\x13\x01", (Protocol.TLS1_3,)
+    TLS_AES_256_GCM_SHA384 = b"\x13\x02", (Protocol.TLS1_3,)
+    TLS_CHACHA20_POLY1305_SHA256 = b"\x13\x03", (Protocol.TLS1_3,)
+    TLS_AES_128_CCM_SHA256 = b"\x13\x04", (Protocol.TLS1_3,)
+    TLS_AES_128_CCM_8_SHA256 = b"\x13\x05", (Protocol.TLS1_3,)
 
     # TLS 1.2 and lower cipher suites.
     TLS_RSA_WITH_3DES_EDE_CBC_SHA = b"\x00\x0a"
@@ -215,24 +312,6 @@ class CipherSuite(Enum):
     TLS_RSA_WITH_NULL_SHA256 = b'\x00\x3B'
     TLS_RSA_WITH_RC4_128_MD5 = b'\x00\x04'
     TLS_RSA_WITH_RC4_128_SHA = b'\x00\x05'
-
-    def __lt__(self, other):
-        if self.__class__ != other.__class__:
-            return NotImplemented
-        return self.value < other.value
-    def __str__(self):
-        return self.name
-    def __repr__(self):
-        return self.name
-
-TLS1_3_CIPHER_SUITES = [
-    CipherSuite.TLS_AES_128_GCM_SHA256,
-    CipherSuite.TLS_AES_256_GCM_SHA384,
-    CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
-    CipherSuite.TLS_AES_128_CCM_SHA256,
-    CipherSuite.TLS_AES_128_CCM_8_SHA256,
-]
-TLS1_2_AND_LOWER_CIPHER_SUITES = [suite for suite in CipherSuite if suite not in TLS1_3_CIPHER_SUITES]
 
 class AlertLevel(Enum):
     """ Different alert levels that can be sent by the server. """
@@ -331,6 +410,7 @@ class ExtensionType(Enum):
     sequence_number_encryption_algorithms = b'\x00\x3c'
 
 class ScanError(Exception):
+    """ Base error class for errors that occur during scanning. """
     pass
 
 class ServerAlertError(ScanError):
@@ -352,7 +432,7 @@ class ConnectionError(ScanError):
     pass
 
 class ProxyError(ConnectionError):
-    """ Class for errors in connecting to a proxy. """
+    """ Class for errors in connecting through a proxy. """
     pass
 
 @dataclass
@@ -373,7 +453,7 @@ def try_parse_server_error(packet: bytes) -> Optional[ServerAlertError]:
     alert_level_id, alert_description_id = struct.unpack('!cc', packet[5:7])
     return ServerAlertError(AlertLevel(alert_level_id), AlertDescription(alert_description_id))
 
-def parse_server_hello(packet: bytes) -> ServerHello:
+def parse_server_hello(packet: bytes, parse_extra_records: bool = False) -> ServerHello:
     """
     Parses a Server Hello packet and returns the cipher suite accepted by the server.
     """
@@ -392,14 +472,16 @@ def parse_server_hello(packet: bytes) -> ServerHello:
     def bytes_to_int(b: bytes) -> int:
         return int.from_bytes(b, byteorder='big')
     
-    record_type = parse_next(1)
-    assert record_type == RecordType.HANDSHAKE.value, record_type
+    record_type = RecordType(parse_next(1))
+    assert record_type == RecordType.HANDSHAKE, record_type
     legacy_record_version = parse_next(2)
     handshake_length = parse_next(2)
-    handshake_type = parse_next(1)
-    assert handshake_type == HandshakeType.server_hello.value, handshake_type
-    server_hello_length = parse_next(3)
-    server_version = parse_next(2)
+    handshake_type = HandshakeType(parse_next(1))
+    assert handshake_type == HandshakeType.server_hello, handshake_type
+    server_hello_length = bytes_to_int(parse_next(3))
+    start_next_handshake = start + server_hello_length
+    # At most TLS 1.2. Handshakes for TLS 1.3 use the supported_versions extension.
+    version = Protocol(parse_next(2))
     server_random = parse_next(32)
     session_id_length = parse_next(1)
     session_id = parse_next(bytes_to_int(session_id_length))
@@ -408,22 +490,45 @@ def parse_server_hello(packet: bytes) -> ServerHello:
     extensions_length = parse_next(2)
     extensions_end = start + bytes_to_int(extensions_length)
 
-    # At most TLS 1.2. Handshakes for TLS 1.3 use the supported_versions extension.
-    version = Protocol(server_version)
     group = None
 
     while start < extensions_end:
-        extension_type = parse_next(2)
+        extension_type = ExtensionType(parse_next(2))
         extension_data_length = parse_next(2)
         extension_data = parse_next(bytes_to_int(extension_data_length))
-        if extension_type == ExtensionType.supported_versions.value:
+        if extension_type == ExtensionType.supported_versions:
             version = Protocol(extension_data)
-        elif extension_type == ExtensionType.key_share.value:
+        elif extension_type == ExtensionType.key_share:
             try:
                 group = Group(extension_data[:2])
             except ValueError:
                 logger.warning(f'Unknown group: {extension_data[:2]!r}')
                 pass
+
+    start = start_next_handshake
+    # If enabled, parse extra records after server_hello.
+    # # Especially useful for TLS 1.2 and lower, as they contain ECC group, certificate, etc.
+    while parse_extra_records and start < len(packet):
+        record_type_value = parse_next(1)
+        legacy_record_version = parse_next(2)
+        record_length = bytes_to_int(parse_next(2))
+        logger.debug('Parsed additional record type: %s', record_type)
+        if record_type_value != RecordType.HANDSHAKE.value:
+            start += record_length
+        else:
+            handshake_type_value = parse_next(1)
+            logger.debug('Parsed additional handshake type: %s', handshake_type)
+            handshake_length = bytes_to_int(parse_next(3))
+            if handshake_type_value == HandshakeType.server_key_exchange.value:
+                assert parse_next(1) == b'\x03', 'Expected curve type: named_curve'
+                group = Group(parse_next(2))
+                pubkey_length = bytes_to_int(parse_next(1))
+                start += pubkey_length
+                signature_algorithm = parse_next(2)
+                signature_length = bytes_to_int(parse_next(2))
+                start += signature_length
+            else:
+                start += handshake_length
     
     cipher_suite = CipherSuite(cipher_suite_bytes)
     return ServerHello(version, compression_method != b'\x00', cipher_suite, group)
@@ -603,26 +708,33 @@ def make_socket(hello_prefs: TlsHelloSettings) -> socket.socket:
     except socket.error as e:
         raise ConnectionError(f"Could not connect to {socket_host}:{socket_port}") from e
 
-def send_hello(hello_prefs: TlsHelloSettings) -> bytes:
+def send_hello(hello_prefs: TlsHelloSettings, wait_additional_records: bool = False) -> Iterator[bytes]:
     """
     Sends a Client Hello packet to the server based on hello_prefs, and returns the first few bytes of the server response.
     """
     logger.debug(f"Sending Client Hello to {hello_prefs.host}:{hello_prefs.port}")
     with make_socket(hello_prefs) as sock:
         sock.send(make_client_hello(hello_prefs))
-        return sock.recv(1024)
+        # Hopefully the ServerHello response.
+        yield sock.recv(4096)
+        # Short timeout to receive buffered packets containing further records.
+        sock.settimeout(0.01)
+        try:
+            while wait_additional_records and (data := sock.recv(4096)):
+                yield data
+        except TimeoutError:
+            pass
     
-def get_server_hello(hello_prefs: TlsHelloSettings) -> ServerHello:
+def get_server_hello(hello_prefs: TlsHelloSettings, parse_additional_records: bool = False) -> ServerHello:
     """
     Sends a Client Hello to the server, and returns the parsed ServerHello.
     Raises exceptions for the different alert messages the server can send.
     """
-    response = send_hello(hello_prefs)
+    response = b''.join(send_hello(hello_prefs, parse_additional_records))
     if error := try_parse_server_error(response):
-        logger.info(f"Server rejected Client Hello: {error.description.name}")
         raise error
 
-    server_hello = parse_server_hello(response)
+    server_hello = parse_server_hello(response, parse_additional_records)
     
     if server_hello.version not in hello_prefs.protocols:
         # Server picked a protocol we didn't ask for.
@@ -631,7 +743,7 @@ def get_server_hello(hello_prefs: TlsHelloSettings) -> ServerHello:
     
     return server_hello
 
-def _iterate_server_option(hello_prefs: TlsHelloSettings, request_option: str, response_option: str, on_response: Callable[[ServerHello], None] = lambda s: None) -> Iterator[Any]:
+def _iterate_server_option(hello_prefs: TlsHelloSettings, request_option: str, response_option: str, on_response: Callable[[ServerHello], None] = lambda s: None, parse_additional_records: bool = False) -> Iterator[Any]:
     """
     Continually sends Client Hello packets to the server, removing the `response_option` from the list of options each time,
     until the server rejects the handshake.
@@ -646,7 +758,7 @@ def _iterate_server_option(hello_prefs: TlsHelloSettings, request_option: str, r
     while options_to_test:
         try:
             logger.debug(f"Offering {len(options_to_test)} {response_option} over {hello_prefs.protocols}: {options_to_test}")
-            server_hello = get_server_hello(hello_prefs)
+            server_hello = get_server_hello(hello_prefs, parse_additional_records=parse_additional_records)
             on_response(server_hello)
         except DowngradeError:
             break
@@ -669,7 +781,7 @@ def enumerate_server_cipher_suites(hello_prefs: TlsHelloSettings, on_response: C
     removing the accepted cipher suite from the list each time.
     Returns a list of all cipher suites the server accepted.
     """
-    return list(_iterate_server_option(hello_prefs, 'cipher_suites', 'cipher_suite', on_response))
+    return list(_iterate_server_option(hello_prefs, 'cipher_suites', 'cipher_suite', on_response, parse_additional_records=False))
 
 def enumerate_server_groups(hello_prefs: TlsHelloSettings, on_response: Callable[[ServerHello], None] = lambda s: None) -> Sequence[Group]:
     """
@@ -677,7 +789,7 @@ def enumerate_server_groups(hello_prefs: TlsHelloSettings, on_response: Callable
     removing the accepted group from the list each time.
     Returns a list of all groups the server accepted.
     """
-    return list(_iterate_server_option(hello_prefs, 'groups', 'group', on_response))
+    return list(_iterate_server_option(hello_prefs, 'groups', 'group', on_response, parse_additional_records=True))
 
 @dataclass
 class Certificate:
@@ -840,7 +952,7 @@ def scan_server(
         if enumerate_options:
             def scan_protocol(protocol):
                 protocol_result = tmp_protocol_results[protocol]
-                suites_to_test = TLS1_3_CIPHER_SUITES if protocol == Protocol.TLS1_3 else TLS1_2_AND_LOWER_CIPHER_SUITES
+                suites_to_test = [cs for cs in CipherSuite if protocol in cs.protocols]
 
                 cipher_suite_prefs = dataclasses.replace(hello_prefs, protocols=[protocol], cipher_suites=suites_to_test)
                 # Save the cipher suites to protocol results, and store each Server Hello for post-processing of other options.
@@ -879,7 +991,7 @@ def scan_server(
             # The cipher suites in cipher_suite_hellos and group_hellos were sent in reversed order.
             # If the server accepted different cipher suites, then we know it respects the client order.
             protocol_result.has_cipher_suite_order = bool(protocol_result._cipher_suite_hellos) and protocol_result._cipher_suite_hellos[0].cipher_suite == protocol_result._group_hellos[0].cipher_suite
-            protocol_result.has_post_quantum = any(group in POST_QUANTUM_GROUPS for group in protocol_result.groups)
+            protocol_result.has_post_quantum = any(group.is_pq for group in protocol_result.groups)
             result.protocols[protocol] = protocol_result
         else:
             result.protocols[protocol] = None
