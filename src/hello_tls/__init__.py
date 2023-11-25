@@ -3,6 +3,7 @@ from typing import Sequence, Any, Callable, Optional, List
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from enum import Enum
 import dataclasses
 import logging
@@ -169,8 +170,7 @@ def make_client_hello(hello_prefs: TlsHelloSettings) -> bytes:
         """ Returns `b` prefixed with its length, encoded as a big-endian integer of `width_bytes` bytes. """
         return len(b).to_bytes(width_bytes, byteorder="big") + b
     
-    protocol_values = [protocol for protocol in hello_prefs.protocols]
-    max_protocol = max(protocol_values)
+    max_protocol = max(hello_prefs.protocols)
     # Record and Hanshake versions have a maximum value due to ossification.
     legacy_handshake_version = min(Protocol.TLS1_2, max_protocol)
     legacy_record_version = min(Protocol.TLS1_0, max_protocol)
@@ -609,8 +609,6 @@ def parse_target(target:str, default_port:int = 443) -> tuple[str, int]:
     """
     Parses the target string into a host and port, stripping protocol and path.
     """
-    import re
-    from urllib.parse import urlparse
     if not re.match(r'\w+://', target):
         # Without a scheme, urlparse will treat the target as a path.
         # Prefix // to make it a netloc.

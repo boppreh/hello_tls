@@ -1,6 +1,5 @@
 from enum import Enum
 from typing import Sequence
-from dataclasses import dataclass
 from functools import total_ordering
 
 @total_ordering
