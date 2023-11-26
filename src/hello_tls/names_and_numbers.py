@@ -45,6 +45,10 @@ class CompressionMethod(Enum):
     NULL = b'\x00'
     DEFLATE = b'\x01'
 
+class PskKeyExchangeMode(Enum):
+    psk_ke = b'\x00'
+    psk_dhe_ke = b'\x01'
+
 class Group(Enum):
     def __new__(cls, value, *rest, **kwds):
         obj = object.__new__(cls)
