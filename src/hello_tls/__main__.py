@@ -17,7 +17,8 @@ parser.add_argument("--timeout", "-t", dest="timeout", type=float, default=DEFAU
 parser.add_argument("--max-workers", "-w", type=int, default=DEFAULT_MAX_WORKERS, help="maximum number of threads/concurrent connections to use for scanning")
 parser.add_argument("--server-name-indication", "-s", default='', help="value to be used in the SNI extension, defaults to the target host")
 parser.add_argument("--certs", "-c", default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
-parser.add_argument("--enumerate", "-e", dest='enumerate', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported protocols, cipher suites, groups, compression, etc")
+parser.add_argument("--enumerate-cipher-suites", "-C", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites")
+parser.add_argument("--enumerate-groups", "-G", dest='enumerate_groups', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported groups")
 parser.add_argument("--protocols", "-p", dest='protocols_str', default=','.join(p.name for p in Protocol), help="comma separated list of TLS/SSL protocols to test")
 parser.add_argument("--proxy", default=None, help="HTTP proxy to use for the connection, defaults to the env variable 'http_proxy' else no proxy")
 parser.add_argument("--verbose", "-v", action="count", default=0, help="increase output verbosity")
@@ -81,7 +82,8 @@ results = scan_server(
         protocols=protocols,
         server_name=args.server_name_indication or host
     ),
-    enumerate_options=args.enumerate,
+    do_enumerate_cipher_suites=args.enumerate_cipher_suites,
+    do_enumerate_groups=args.enumerate_groups,
     fetch_cert_chain=args.certs,
     max_workers=args.max_workers,
     progress=progress,

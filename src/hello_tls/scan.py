@@ -261,12 +261,13 @@ class ProtocolResult:
 class ServerScanResult:
     connection: ConnectionSettings
     protocols: dict[Protocol, Optional[ProtocolResult]]
-    certificate_chain: Optional[list[Certificate]]
+    certificate_chain: list[Certificate]
 
 def scan_server(
     connection_settings: ConnectionSettings,
     client_hello: Optional[ClientHello] = None,
-    enumerate_options: bool = True,
+    do_enumerate_cipher_suites: bool = True,
+    do_enumerate_groups: bool = True,
     fetch_cert_chain: bool = True,
     max_workers: int = DEFAULT_MAX_WORKERS,
     progress: Callable[[int, int], None] = lambda current, total: None,
@@ -291,22 +292,23 @@ def scan_server(
 
         tasks: List[Callable[[], None]] = []
 
-        if enumerate_options:
-            def scan_protocol(protocol):
-                protocol_result = tmp_protocol_results[protocol]
-                suites_to_test = [cs for cs in CipherSuite if protocol in cs.protocols]
+        def scan_protocol(protocol):
+            protocol_result = tmp_protocol_results[protocol]
+            suites_to_test = [cs for cs in CipherSuite if protocol in cs.protocols]
 
+            if do_enumerate_cipher_suites:
                 cipher_suite_hello = dataclasses.replace(client_hello, protocols=[protocol], cipher_suites=suites_to_test)
                 # Save the cipher suites to protocol results, and store each Server Hello for post-processing of other options.
                 tasks.append(lambda: protocol_result.cipher_suites.extend(enumerate_server_cipher_suites(connection_settings, cipher_suite_hello, protocol_result._cipher_suite_hellos.append)))
 
+            if do_enumerate_groups:
                 # Submit reversed list of cipher suites when checking for groups, to detect servers that respect user cipher suite order.
                 group_hello = dataclasses.replace(client_hello, protocols=[protocol], cipher_suites=list(reversed(suites_to_test)))
                 tasks.append(lambda: protocol_result.groups.extend(enumerate_server_groups(connection_settings, group_hello, protocol_result._group_hellos.append)))
 
-            for protocol in client_hello.protocols:
-                # Must be extracted to a function to avoid late binding in task lambdas.
-                scan_protocol(protocol)
+        for protocol in client_hello.protocols:
+            # Must be extracted to a function to avoid late binding in task lambdas.
+            scan_protocol(protocol)
 
         if fetch_cert_chain:
             tasks.append(lambda: tmp_certificate_chain.extend(get_server_certificate_chain(connection_settings, client_hello)))
@@ -321,16 +323,16 @@ def scan_server(
     result = ServerScanResult(
         connection=connection_settings,
         protocols={},
-        certificate_chain=tmp_certificate_chain if tmp_certificate_chain is not None else None,
+        certificate_chain=tmp_certificate_chain,
     )
 
     # Finish processing the Server Hellos to detect compression and cipher suite order.
     for protocol, protocol_result in tmp_protocol_results.items():
-        if protocol_result.cipher_suites:
-            protocol_result.has_compression = protocol_result._cipher_suite_hellos[0].compression != CompressionMethod.NULL
+        if protocol_result.cipher_suites or protocol_result.groups:
+            protocol_result.has_compression = (protocol_result._cipher_suite_hellos or protocol_result._group_hellos)[0].compression != CompressionMethod.NULL
             # The cipher suites in cipher_suite_hellos and group_hellos were sent in reversed order.
             # If the server accepted different cipher suites, then we know it respects the client order.
-            protocol_result.has_cipher_suite_order = bool(protocol_result._cipher_suite_hellos) and protocol_result._cipher_suite_hellos[0].cipher_suite == protocol_result._group_hellos[0].cipher_suite
+            protocol_result.has_cipher_suite_order = bool(protocol_result._cipher_suite_hellos and protocol_result._group_hellos) and protocol_result._cipher_suite_hellos[0].cipher_suite == protocol_result._group_hellos[0].cipher_suite
             protocol_result.has_post_quantum = any(group.is_pq for group in protocol_result.groups)
             result.protocols[protocol] = protocol_result
         else:
