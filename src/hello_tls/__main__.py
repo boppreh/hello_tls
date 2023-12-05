@@ -7,10 +7,6 @@ import sys
 import json
 import logging
 import argparse
-from typing import Any
-import dataclasses
-from enum import Enum
-from datetime import datetime
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("target", help="server to scan, in the form of 'example.com', 'example.com:443', or even a full URL")
 parser.add_argument("--timeout", "-t", dest="timeout", type=float, default=DEFAULT_TIMEOUT, help="socket connection timeout in seconds")

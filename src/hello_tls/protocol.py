@@ -1,4 +1,4 @@
-from typing import Iterator, Sequence, Optional, Iterable, Callable, Tuple
+from typing import Iterator, List, Sequence, Optional, Iterable, Callable, Tuple
 from contextlib import contextmanager
 from dataclasses import dataclass
 import logging
@@ -103,7 +103,7 @@ def parse_server_response(packets: Iterable[bytes], parse_extra_records: bool = 
             assert current_position() <= record_end
             read_next(record_end - current_position())
             record_type_value = read_next(1)
-            logger.debug(f'Parsed record type {record_type_value}')
+            logger.debug(f'Parsed record type {record_type_value!r}')
             legacy_record_version = read_next(2)
             record_length = _bytes_to_int(read_next(2))
             record_end = current_position() + record_length
@@ -112,7 +112,7 @@ def parse_server_response(packets: Iterable[bytes], parse_extra_records: bool = 
                 break
             else:
                 handshake_type_value = read_next(1)
-                logger.debug(f'Parsed handshake type {handshake_type_value}')
+                logger.debug(f'Parsed handshake type {handshake_type_value!r}')
                 record_length = _bytes_to_int(read_next(3))
                 if handshake_type_value == HandshakeType.server_hello_done.value:
                     # Stop parsing records after server_hello_done.
@@ -149,7 +149,7 @@ def make_client_hello(client_hello: ClientHello) -> bytes:
     Creates a TLS Record byte string with Client Hello handshake based on client preferences.
     """
     # Because Python's `bytes` are immutable, we must use a list of octets instead.
-    octets = []
+    octets: List[int] = []
 
     # TLS really likes its length-prefixed data structures. I strongly prefer writing
     # the bytes in the order they'll be sent, so I use this helper context manager to

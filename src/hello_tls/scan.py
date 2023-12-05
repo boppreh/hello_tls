@@ -1,3 +1,4 @@
+from enum import Enum
 from multiprocessing.pool import ThreadPool
 import socket
 import re
@@ -250,7 +251,7 @@ class ProtocolResult:
     groups: List[Group]
     cipher_suites: List[CipherSuite]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # Internal fields to store every ServerHello seen during cipher suite and group enumeration.
         # Used by the scan to detect compression and cipher suite order without additional handshakes.
         self._cipher_suite_hellos: List[ServerHello] = []
