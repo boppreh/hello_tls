@@ -1,7 +1,7 @@
 from multiprocessing.pool import ThreadPool
 import socket
 import re
-from typing import Sequence, List, Optional, Iterator, Callable, Any
+from typing import Iterable, Sequence, List, Optional, Iterator, Callable, Any
 from urllib.parse import urlparse
 
 import dataclasses
@@ -36,6 +36,7 @@ class ConnectionSettings:
     port: int = 443
     proxy: Optional[str] = None
     timeout_in_seconds: Optional[float] = DEFAULT_TIMEOUT
+    date: datetime = dataclasses.field(default_factory=lambda: datetime.now(tz=timezone.utc).replace(microsecond=0))
 
 def make_socket(settings: ConnectionSettings) -> socket.socket:
     """
@@ -149,23 +150,15 @@ class Certificate:
     subject_alternative_names: list[str]
     key_type: str
     key_length_in_bits: int
-    all_key_usage: list[str] = dataclasses.field(init=False)
+    all_key_usage: list[str]
     not_before: datetime
     not_after: datetime
-    is_expired: bool = dataclasses.field(init=False)
-    days_until_expiration: int = dataclasses.field(init=False)
+    is_expired: bool
+    days_until_expiration: int
     signature_algorithm: str
     extensions: dict[str, str]
-
-    def __post_init__(self):
-        now = datetime.now(tz=timezone.utc)
-        self.is_expired = self.not_after < now
-        self.days_until_expiration = (self.not_after - now).days
-
-        all_key_usage_str = self.extensions.get('keyUsage', '') + ', ' + self.extensions.get('extendedKeyUsage', '')
-        self.all_key_usage = [ku for ku in all_key_usage_str.split(', ') if ku]
     
-def get_server_certificate_chain(connection_settings: ConnectionSettings, client_hello: ClientHello) -> Sequence[Certificate]:
+def get_server_certificate_chain(connection_settings: ConnectionSettings, client_hello: ClientHello) -> Iterable[Certificate]:
     """
     Use socket and pyOpenSSL to get the server certificate chain.
     """
@@ -219,7 +212,6 @@ def get_server_certificate_chain(connection_settings: ConnectionSettings, client
     logger.info(f"Received {len(raw_certs)} certificates")
     
     public_key_type_by_id = {crypto.TYPE_DH: 'DH', crypto.TYPE_DSA: 'DSA', crypto.TYPE_EC: 'EC', crypto.TYPE_RSA: 'RSA'}
-    nice_certs: list[Certificate] = []
     for raw_cert in raw_certs:
         extensions: dict[str, str] = {}
         for i in range(raw_cert.get_extension_count()):
@@ -228,20 +220,27 @@ def get_server_certificate_chain(connection_settings: ConnectionSettings, client
 
         san = re.findall(r'DNS:(.+?)(?:, |$)', extensions.get('subjectAltName', ''))
 
-        nice_certs.append(Certificate(
+        all_key_usage_str = extensions.get('keyUsage', '') + ', ' + extensions.get('extendedKeyUsage', '')
+        all_key_usage = [ku for ku in all_key_usage_str.split(', ') if ku]
+        not_after = _x509_time_to_datetime(raw_cert.get_notAfter())
+        days_until_expiration = (not_after - connection_settings.date).days
+
+        yield Certificate(
             serial_number=str(raw_cert.get_serial_number()),
             subject=_x509_name_to_dict(raw_cert.get_subject()),
             issuer=_x509_name_to_dict(raw_cert.get_issuer()),
             subject_alternative_names=san,
             not_before=_x509_time_to_datetime(raw_cert.get_notBefore()),
-            not_after=_x509_time_to_datetime(raw_cert.get_notAfter()),
+            not_after=not_after,
             signature_algorithm=raw_cert.get_signature_algorithm().decode('utf-8'),
             extensions=extensions,
             key_length_in_bits=raw_cert.get_pubkey().bits(),
             key_type=public_key_type_by_id.get(raw_cert.get_pubkey().type(), 'UNKNOWN'),
             fingerprint_sha256=raw_cert.digest('sha256').decode('utf-8'),
-        ))
-    return nice_certs
+            all_key_usage=all_key_usage,
+            is_expired=raw_cert.has_expired(),
+            days_until_expiration=days_until_expiration,
+        )
 
 @dataclasses.dataclass
 class ProtocolResult:
