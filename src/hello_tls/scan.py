@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import dataclasses
 from datetime import datetime, timezone
-from .protocol import ClientHello, ScanError, make_client_hello, parse_server_response, ServerAlertError, BadServerResponse, ServerHello, logger
+from .protocol import ClientHello, ScanError, make_client_hello, parse_server_hello, ServerAlertError, BadServerResponse, ServerHello, logger
 from .names_and_numbers import AlertDescription, CipherSuite, Group, Protocol, CompressionMethod
 
 # Default number of workers/threads/concurrent connections to use.
@@ -73,7 +73,7 @@ def make_socket(settings: ConnectionSettings) -> socket.socket:
     except socket.error as e:
         raise ConnectionError(f"Could not connect to {socket_host}:{socket_port}") from e
 
-def send_hello(connection_settings: ConnectionSettings, client_hello: ClientHello, parse_additional_records: bool = False) -> ServerHello:
+def send_hello(connection_settings: ConnectionSettings, client_hello: ClientHello) -> ServerHello:
     """
     Sends a Client Hello to the server, and returns the parsed ServerHello.
     Raises exceptions for the different alert messages the server can send.
@@ -82,7 +82,7 @@ def send_hello(connection_settings: ConnectionSettings, client_hello: ClientHell
     sock.send(make_client_hello(client_hello))
 
     packet_stream = iter(lambda: sock.recv(4096), b'')
-    server_hello = parse_server_response(packet_stream, parse_additional_records)
+    server_hello = parse_server_hello(packet_stream)
     
     if server_hello.version not in client_hello.protocols:
         # Server picked a protocol we didn't ask for.
@@ -91,7 +91,7 @@ def send_hello(connection_settings: ConnectionSettings, client_hello: ClientHell
     
     return server_hello
 
-def _iterate_server_option(connection_settings: ConnectionSettings, client_hello: ClientHello, request_option: str, response_option: str, on_response: Callable[[ServerHello], None] = lambda s: None, parse_additional_records: bool = False) -> Iterator[Any]:
+def _iterate_server_option(connection_settings: ConnectionSettings, client_hello: ClientHello, request_option: str, response_option: str, on_response: Callable[[ServerHello], None] = lambda s: None) -> Iterator[Any]:
     """
     Continually sends Client Hello packets to the server, removing the `response_option` from the list of options each time,
     until the server rejects the handshake.
@@ -106,7 +106,7 @@ def _iterate_server_option(connection_settings: ConnectionSettings, client_hello
     while options_to_test:
         try:
             logger.debug(f"Offering {len(options_to_test)} {response_option} over {client_hello.protocols}: {options_to_test}")
-            server_hello = send_hello(connection_settings, client_hello, parse_additional_records=parse_additional_records)
+            server_hello = send_hello(connection_settings, client_hello)
             on_response(server_hello)
         except DowngradeError:
             break
@@ -123,21 +123,21 @@ def _iterate_server_option(connection_settings: ConnectionSettings, client_hello
         options_to_test.remove(accepted_option)
         yield accepted_option
 
-def enumerate_server_cipher_suites(connection_settings: ConnectionSettings, client_hello: ClientHello, on_response: Callable[[ServerHello], None] = lambda s: None) -> Sequence[CipherSuite]:
+def enumerate_server_cipher_suites(connection_settings: ConnectionSettings, client_hello: ClientHello, on_response: Callable[[ServerHello], None] = lambda s: None) -> List[CipherSuite]:
     """
     Given a list of cipher suites to test, sends a sequence of Client Hello packets to the server,
     removing the accepted cipher suite from the list each time.
     Returns a list of all cipher suites the server accepted.
     """
-    return list(_iterate_server_option(connection_settings, client_hello, 'cipher_suites', 'cipher_suite', on_response, parse_additional_records=False))
+    return list(_iterate_server_option(connection_settings, client_hello, 'cipher_suites', 'cipher_suite', on_response))
 
-def enumerate_server_groups(connection_settings: ConnectionSettings, client_hello: ClientHello, on_response: Callable[[ServerHello], None] = lambda s: None) -> Sequence[Group]:
+def enumerate_server_groups(connection_settings: ConnectionSettings, client_hello: ClientHello, on_response: Callable[[ServerHello], None] = lambda s: None) -> Optional[List[Group]]:
     """
     Given a list of groups to test, sends a sequence of Client Hello packets to the server,
     removing the accepted group from the list each time.
     Returns a list of all groups the server accepted.
     """
-    return list(_iterate_server_option(connection_settings, client_hello, 'groups', 'group', on_response, parse_additional_records=True))
+    return list(_iterate_server_option(connection_settings, client_hello, 'groups', 'group', on_response))
 
 @dataclasses.dataclass
 class Certificate:
@@ -246,10 +246,10 @@ def get_server_certificate_chain(connection_settings: ConnectionSettings, client
 @dataclasses.dataclass
 class ProtocolResult:
     has_compression: bool
-    has_cipher_suite_order: bool
-    has_post_quantum: bool
-    groups: List[Group]
-    cipher_suites: List[CipherSuite]
+    has_cipher_suite_order: Optional[bool]
+    has_post_quantum: Optional[bool]
+    groups: Optional[List[Group]]
+    cipher_suites: Optional[List[CipherSuite]]
 
     def __post_init__(self) -> None:
         # Internal fields to store every ServerHello seen during cipher suite and group enumeration.
@@ -285,7 +285,7 @@ def scan_server(
         client_hello = ClientHello(server_name=connection_settings.host)            
 
     tmp_certificate_chain: List[Certificate] = []
-    tmp_protocol_results = {p: ProtocolResult(False, False, False, [], []) for p in Protocol}
+    tmp_protocol_results = {p: ProtocolResult(False, None, None, None, None) for p in Protocol}
 
     with ThreadPool(max_workers) as pool:
         logger.debug("Initializing workers")
@@ -299,12 +299,18 @@ def scan_server(
             if do_enumerate_cipher_suites:
                 cipher_suite_hello = dataclasses.replace(client_hello, protocols=[protocol], cipher_suites=suites_to_test)
                 # Save the cipher suites to protocol results, and store each Server Hello for post-processing of other options.
-                tasks.append(lambda: protocol_result.cipher_suites.extend(enumerate_server_cipher_suites(connection_settings, cipher_suite_hello, protocol_result._cipher_suite_hellos.append)))
+                def task():
+                    cipher_suites = enumerate_server_cipher_suites(connection_settings, cipher_suite_hello, protocol_result._cipher_suite_hellos.append)
+                    protocol_result.cipher_suites = cipher_suites
+                tasks.append(task)
 
             if do_enumerate_groups:
                 # Submit reversed list of cipher suites when checking for groups, to detect servers that respect user cipher suite order.
                 group_hello = dataclasses.replace(client_hello, protocols=[protocol], cipher_suites=list(reversed(suites_to_test)))
-                tasks.append(lambda: protocol_result.groups.extend(enumerate_server_groups(connection_settings, group_hello, protocol_result._group_hellos.append)))
+                def task():
+                    groups = enumerate_server_groups(connection_settings, group_hello, protocol_result._group_hellos.append)
+                    protocol_result.groups = groups or None
+                tasks.append(task)
 
         for protocol in client_hello.protocols:
             # Must be extracted to a function to avoid late binding in task lambdas.
@@ -328,15 +334,22 @@ def scan_server(
 
     # Finish processing the Server Hellos to detect compression and cipher suite order.
     for protocol, protocol_result in tmp_protocol_results.items():
-        if protocol_result.cipher_suites or protocol_result.groups:
-            protocol_result.has_compression = (protocol_result._cipher_suite_hellos or protocol_result._group_hellos)[0].compression != CompressionMethod.NULL
-            # The cipher suites in cipher_suite_hellos and group_hellos were sent in reversed order.
-            # If the server accepted different cipher suites, then we know it respects the client order.
-            protocol_result.has_cipher_suite_order = bool(protocol_result._cipher_suite_hellos and protocol_result._group_hellos) and protocol_result._cipher_suite_hellos[0].cipher_suite == protocol_result._group_hellos[0].cipher_suite
-            protocol_result.has_post_quantum = any(group.is_pq for group in protocol_result.groups)
-            result.protocols[protocol] = protocol_result
-        else:
+        if not protocol_result.cipher_suites and not protocol_result.groups:
             result.protocols[protocol] = None
+            continue
+
+        result.protocols[protocol] = protocol_result
+
+        sample_hello = (protocol_result._cipher_suite_hellos or protocol_result._group_hellos)[0]
+        protocol_result.has_compression = sample_hello.compression != CompressionMethod.NULL
+
+        if protocol_result.groups is not None:
+            protocol_result.has_post_quantum = any(group.is_pq for group in protocol_result.groups)
+
+        # The cipher suites in cipher_suite_hellos and group_hellos were sent in reversed order.
+        # If the server accepted different cipher suites, then we know it respects the client order.
+        if protocol_result.cipher_suites and protocol_result.groups:
+            protocol_result.has_cipher_suite_order = protocol_result._cipher_suite_hellos[0].cipher_suite == protocol_result._group_hellos[0].cipher_suite
 
     return result
 

@@ -50,7 +50,7 @@ def _make_stream_parser(packets: Iterable[bytes]) -> Tuple[Callable[[int], bytes
 def _bytes_to_int(b: bytes) -> int:
     return int.from_bytes(b, byteorder='big')
 
-def parse_server_response(packets: Iterable[bytes], parse_extra_records: bool = False) -> ServerHello:
+def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
     """
     Parses a Server Hello packet and returns the cipher suite accepted by the server.
     """
@@ -94,45 +94,6 @@ def parse_server_response(packets: Iterable[bytes], parse_extra_records: bool = 
             except ValueError:
                 logger.warning(f'Unknown group: {extension_data[:2]!r}')
                 pass
-
-    if parse_extra_records:
-        # If enabled, parse extra records after server_hello.
-        # # Especially useful for TLS 1.2 and lower, as they contain ECC group, certificate, etc.
-        while True:
-            # Skip to the end of the last record to resynchronize parsing.
-            assert current_position() <= record_end
-            read_next(record_end - current_position())
-            record_type_value = read_next(1)
-            logger.debug(f'Parsed record type {record_type_value!r}')
-            legacy_record_version = read_next(2)
-            record_length = _bytes_to_int(read_next(2))
-            record_end = current_position() + record_length
-            if record_type_value != RecordType.HANDSHAKE.value:
-                # Done with the handshake records, we won't be able to parse the rest.
-                break
-            else:
-                handshake_type_value = read_next(1)
-                logger.debug(f'Parsed handshake type {handshake_type_value!r}')
-                record_length = _bytes_to_int(read_next(3))
-                if handshake_type_value == HandshakeType.server_hello_done.value:
-                    # Stop parsing records after server_hello_done.
-                    break
-                elif handshake_type_value == HandshakeType.server_key_exchange.value:
-                    assert read_next(1) == b'\x03', 'Expected curve type: named_curve'
-                    group = Group(read_next(2))
-                    # FIXME: TLS 1.2 includes a signature_algorithm field, but TLS 1.1 doesn't. Why?
-                    continue
-                    #pubkey_length = _bytes_to_int(read_next(1))
-                    #pubkey = read_next(pubkey_length)
-                    #signature_algorithm = read_next(2)
-                    #signature_length = _bytes_to_int(read_next(2))
-                    #signature = read_next(signature_length)
-                elif handshake_type_value == HandshakeType.certificate.value:
-                    certificates_length = _bytes_to_int(read_next(3))
-                    certificates_bytes = read_next(certificates_length)
-                else:
-                    # Unknown handshake type, skip it.
-                    continue
     
     return ServerHello(version, compression_method, cipher_suite, group)
 
