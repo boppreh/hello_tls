@@ -352,3 +352,21 @@ def parse_target(target:str, default_port:int = 443) -> tuple[str, int]:
     host = url.hostname or 'localhost'
     port = url.port if url.port else default_port
     return host, port
+
+def to_json_obj(o: Any) -> Any:
+    """
+    Converts an object to a JSON-serializable structure, replacing dataclasses, enums, sets, datetimes, etc.
+    """
+    if isinstance(o, dict):
+        return {to_json_obj(key): to_json_obj(value) for key, value in o.items()}
+    elif dataclasses.is_dataclass(o):
+        return to_json_obj(dataclasses.asdict(o))
+    elif isinstance(o, set):
+        return sorted(to_json_obj(item) for item in o)
+    elif isinstance(o, (tuple, list)):
+        return [to_json_obj(item) for item in o]
+    elif isinstance(o, Enum):
+        return o.name
+    elif isinstance(o, datetime):
+        return o.isoformat(' ')
+    return o

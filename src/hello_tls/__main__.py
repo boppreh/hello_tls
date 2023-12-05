@@ -1,4 +1,4 @@
-from .scan import scan_server, DEFAULT_TIMEOUT, DEFAULT_MAX_WORKERS, parse_target, ConnectionSettings
+from .scan import scan_server, DEFAULT_TIMEOUT, DEFAULT_MAX_WORKERS, parse_target, ConnectionSettings, to_json_obj
 from .protocol import ClientHello
 from .names_and_numbers import Protocol
 
@@ -31,25 +31,6 @@ logging.basicConfig(
     style='{',
     level=[logging.WARNING, logging.INFO, logging.DEBUG][min(2, args.verbose)]
 )
-
-def to_json_obj(o: Any) -> Any:
-    """
-    Converts an object to a JSON-serializable structure, replacing dataclasses, enums, sets, datetimes, etc.
-    """
-    if isinstance(o, dict):
-        return {to_json_obj(key): to_json_obj(value) for key, value in o.items()}
-    elif dataclasses.is_dataclass(o):
-        return to_json_obj(dataclasses.asdict(o))
-    elif isinstance(o, set):
-        return sorted(to_json_obj(item) for item in o)
-    elif isinstance(o, (tuple, list)):
-        return [to_json_obj(item) for item in o]
-    elif isinstance(o, Enum):
-        return o.name
-    elif isinstance(o, datetime):
-        return o.isoformat(' ')
-    return o
-
 
 if not args.protocols_str:
     parser.error("no protocols to test")
