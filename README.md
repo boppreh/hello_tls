@@ -1,10 +1,12 @@
 # Hello TLS!
 
-This is a pure Python, single-file, dependency-less implementation of SSL/TLS Client Hello and basic scaning.
+This is a pure Python, dependency-less\* implementation of SSL/TLS Client Hello and basic scaning.
 
 Its purpose is to quickly discover what cipher suites and SSL/TLS protocols are enabled on a server. Since the server doesn't advertise this list, instead picking from what is offered by the client, hello_tls.py sends a sequence of Client Hello with different cipher suite and protocol combinations. It usually needs less than 8 requests and 300 ms, but for servers with many cipher suites or high latency, bumping `max_workers` splits discovery over many threads.
 
-There's no actual cryptography, just sending a stream of bytes and seeing if the server reply vaguely looks ok or not. Supports TLS 1.3, TLS 1.2, TLS 1.1, TLS 1.0, and SSLv3. Optionally, the certificate chain can be fetched and parsed, at the cost of relying on pyOpenSSL.
+There's no actual cryptography, just sending a stream of bytes and seeing if the server reply vaguely looks ok or not. Supports TLS 1.3, TLS 1.2, TLS 1.1, TLS 1.0, and SSLv3.
+
+\* Optionally, the certificate chain can be fetched and parsed, at the cost of relying on pyOpenSSL.
 
 ## Installation
 
@@ -29,15 +31,13 @@ Main function signature:
 
 ```python
 def scan_server(
-    host: str,
-    port: int = 443,
-    protocols: Sequence[Protocol] = tuple(Protocol),
-    enumerate_cipher_suites: bool = True,
+    connection_settings: ConnectionSettings,
+    client_hello: Optional[ClientHello] = None,
+    do_enumerate_cipher_suites: bool = True,
+    do_enumerate_groups: bool = True,
     fetch_cert_chain: bool = True,
-    server_name_indication: str | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
-    timeout_in_seconds: float | None = DEFAULT_TIMEOUT,
-    proxy: str | None = None,
+    progress: Callable[[int, int], None] = lambda current, total: None,
     ) -> ServerScanResult:
     ...
 ```
@@ -45,8 +45,8 @@ def scan_server(
 Usage:
 
 ```pyrhon
-from hello_tls import scan_server
-result = scan_server('boppreh.com')
+from hello_tls import scan_server, ConnectionSettings
+result = scan_server(ConnectionSettings('boppreh.com'))
 print(result)
 ```
 
