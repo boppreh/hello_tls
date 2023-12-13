@@ -31,7 +31,7 @@ Main function signature:
 
 ```python
 def scan_server(
-    connection_settings: ConnectionSettings,
+    connection_settings: Union[ConnectionSettings, str],
     client_hello: Optional[ClientHello] = None,
     do_enumerate_cipher_suites: bool = True,
     do_enumerate_groups: bool = True,
@@ -45,8 +45,8 @@ def scan_server(
 Usage:
 
 ```pyrhon
-from hello_tls import scan_server, ConnectionSettings
-result = scan_server(ConnectionSettings('boppreh.com'))
+from hello_tls import scan_server
+result = scan_server('boppreh.com')
 print(result)
 ```
 

@@ -2,7 +2,7 @@ from enum import Enum
 from multiprocessing.pool import ThreadPool
 import socket
 import re
-from typing import Iterable, Sequence, List, Optional, Iterator, Callable, Any
+from typing import Iterable, Union, List, Optional, Iterator, Callable, Any
 from urllib.parse import urlparse
 
 import dataclasses
@@ -264,7 +264,7 @@ class ServerScanResult:
     certificate_chain: list[Certificate]
 
 def scan_server(
-    connection_settings: ConnectionSettings,
+    connection_settings: Union[ConnectionSettings, str],
     client_hello: Optional[ClientHello] = None,
     do_enumerate_cipher_suites: bool = True,
     do_enumerate_groups: bool = True,
@@ -279,6 +279,9 @@ def scan_server(
 
     Runs scans in parallel to speed up the process, with up to `max_workers` threads connecting at the same time.
     """
+    if isinstance(connection_settings, str):
+        connection_settings = ConnectionSettings(*parse_target(connection_settings))
+        
     logger.info(f"Scanning {connection_settings.host}:{connection_settings.port}")
 
     if not client_hello:
