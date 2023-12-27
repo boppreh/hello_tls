@@ -217,7 +217,11 @@ def get_server_certificate_chain(connection_settings: ConnectionSettings, client
         extensions: dict[str, str] = {}
         for i in range(raw_cert.get_extension_count()):
             extension = raw_cert.get_extension(i)
-            extensions[extension.get_short_name().decode('utf-8')] = str(extension)
+            try:
+                value = str(extension)
+            except:
+                value = extension.get_data().hex(':')
+            extensions[extension.get_short_name().decode('utf-8')] = value
 
         san = re.findall(r'DNS:(.+?)(?:, |$)', extensions.get('subjectAltName', ''))
 
