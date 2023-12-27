@@ -111,7 +111,7 @@ def _iterate_server_option(connection_settings: ConnectionSettings, client_hello
         except DowngradeError:
             break
         except ServerAlertError as error:
-            if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure]:
+            if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure, AlertDescription.close_notify]:
                 break
             raise
 
