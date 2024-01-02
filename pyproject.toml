@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hello_tls"
-version = "0.3.2"
+version = "0.3.3"
 authors = [
   { name="BoppreH", email="github@boppreh.com" },
 ]
@@ -19,6 +19,9 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+
+[project.scripts]
+hello_tls = "hello_tls.__main__:main"
 
 [project.urls]
 "Homepage" = "https://github.com/boppreh/hello_tls"
