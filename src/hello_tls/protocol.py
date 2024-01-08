@@ -230,12 +230,15 @@ def make_client_hello(client_hello: ClientHello) -> bytes:
                     with prefix_length('pre_shared_key_modes list', width_bytes=1):
                         octets.extend(PskKeyExchangeMode.psk_dhe_ke.value)
 
+                # Add empty key_share extension
+                # https://datatracker.ietf.org/doc/html/rfc8446#section-4.2.8
+                # "This vector MAY be empty if the client is requesting a HelloRetryRequest. ... Clients MUST
+                # NOT offer any KeyShareEntry values for groups not listed in the client's "supported_groups"
+                # extension. Servers MAY check for violations of these rules and abort the handshake with an
+                # "illegal_parameter" alert if one is violated."
                 octets.extend(ExtensionType.key_share.value)
                 with prefix_length('key_share extension'):
                     with prefix_length('key share bytes'):
-                        octets.extend(Group.x25519.value)
-                        with prefix_length('pre shared key public key'):
-                            # Shamelessly stolen from https://tls13.xargs.org/#client-hello/annotated
-                            octets.extend([0x35, 0x80, 0x72, 0xd6, 0x36, 0x58, 0x80, 0xd1, 0xae, 0xea, 0x32, 0x9a, 0xdf, 0x91, 0x21, 0x38, 0x38, 0x51, 0xed, 0x21, 0xa2, 0x8e, 0x3b, 0x75, 0xe9, 0x65, 0xd0, 0xd2, 0xcd, 0x16, 0x62, 0x54])
+                        pass
 
     return bytes(octets)
