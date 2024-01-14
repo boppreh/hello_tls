@@ -54,31 +54,47 @@ Output:
 
 ```python
 ServerScanResult(
-    host='boppreh.com',
-    port=443,
+    connection=ConnectionSettings(
+        host="boppreh.com",
+        port=443,
+        proxy=None,
+        timeout_in_seconds=2,
+        date=datetime(2024, 1, 14, 23, 49, 33, tzinfo=datetime.timezone.utc),
+    ),
     protocols={
         SSLv3: None,
         TLS1_0: None,
         TLS1_1: None,
         TLS1_2: ProtocolResult(
             has_compression=False,
-            has_cipher_suite_order=True,
-            groups=[],
-            cipher_suites=[TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256, ...]
+            has_cipher_suite_order=None,
+            has_post_quantum=None,
+            groups=None,
+            cipher_suites=[
+                TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+                TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+                TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+            ],
         ),
         TLS1_3: ProtocolResult(
             has_compression=False,
             has_cipher_suite_order=False,
-            groups=[x25519],
-            cipher_suites=[TLS_CHACHA20_POLY1305_SHA256, ...]
-        )
+            has_post_quantum=False,
+            groups=[x25519, secp256r1],
+            cipher_suites=[
+                TLS_AES_128_GCM_SHA256,
+                TLS_AES_256_GCM_SHA384,
+                TLS_CHACHA20_POLY1305_SHA256,
+            ],
+        ),
     },
     certificate_chain=[
-        Certificate(serial_number, ...)
-        Certificate(serial_number, ...)
-        Certificate(serial_number, ...)
-    ]
+        Certificate(...),
+        Certificate(...),
+        Certificate(...),
+    ],
 )
+
 ```
 
 ## As a command line application
@@ -88,25 +104,33 @@ python -m hello_tls boppreh.com
 ```
 ```json
 {
-  "host": "boppreh.com",
-  "port": 443,
+  "connection": {
+    "host": "boppreh.com",
+    "port": 443,
+    "proxy": null,
+    "timeout_in_seconds": 2,
+    "date": "2024-01-14 23:47:56+00:00"
+  },
   "protocols": {
     "TLS1_3": {
       "has_compression": false,
       "has_cipher_suite_order": false,
+      "has_post_quantum": false,
       "groups": [
-        "x25519"
+        "x25519",
+        "secp256r1"
       ],
       "cipher_suites": [
-        "TLS_CHACHA20_POLY1305_SHA256",
         "TLS_AES_128_GCM_SHA256",
-        "TLS_AES_256_GCM_SHA384"
+        "TLS_AES_256_GCM_SHA384",
+        "TLS_CHACHA20_POLY1305_SHA256"
       ]
     },
     "TLS1_2": {
       "has_compression": false,
-      "has_cipher_suite_order": true,
-      "groups": [],
+      "has_cipher_suite_order": null,
+      "has_post_quantum": null,
+      "groups": null,
       "cipher_suites": [
         "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
         "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
@@ -119,8 +143,8 @@ python -m hello_tls boppreh.com
   },
   "certificate_chain": [
     {
-      "serial_number": "414465106860707586851651369676697477353074",
-      "fingerprint_sha256": "81:3E:78:A7:2F:E6:74:E3:2C:84:F1:4D:2E:E0:E8:B1:F6:FC:CF:2C:66:E5:21:20:4F:F7:D9:44:76:3F:60:C5",
+      "serial_number": "279832348808219465711972934848066615033582",
+      "fingerprint_sha256": "A4:22:D9:41:80:79:9E:9B:7E:35:17:E6:4C:7B:50:B8:D6:C1:4A:9B:9C:6B:BD:93:DC:94:C2:9F:46:E2:CA:A5",
       "subject": {
         "CN": "boppreh.com"
       },
@@ -129,21 +153,32 @@ python -m hello_tls boppreh.com
         "O": "Let's Encrypt",
         "CN": "R3"
       },
+      "subject_alternative_names": [
+        "boppreh.com"
+      ],
       "key_type": "EC",
       "key_length_in_bits": 256,
-      "not_before": "2023-09-18T10:42:02",
-      "not_after": "2023-12-17T10:42:01",
+      "all_key_usage": [
+        "Digital Signature",
+        "TLS Web Server Authentication",
+        "TLS Web Client Authentication"
+      ],
+      "not_before": "2023-11-17 09:47:19+00:00",
+      "not_after": "2024-02-15 09:47:18+00:00",
+      "is_expired": false,
+      "days_until_expiration": 31,
       "signature_algorithm": "sha256WithRSAEncryption",
       "extensions": {
         "keyUsage": "Digital Signature",
         "extendedKeyUsage": "TLS Web Server Authentication, TLS Web Client Authentication",
         "basicConstraints": "CA:FALSE",
-        "subjectKeyIdentifier": "AF:F2:C0:54:5D:24:02:0A:D3:AA:91:C0:CD:35:90:A1:E1:64:91:2C",
+        "subjectKeyIdentifier": "75:57:13:C3:E0:82:B5:37:63:9B:90:C6:89:ED:79:B1:CE:30:0B:2F",
         "authorityKeyIdentifier": "14:2E:B3:17:B7:58:56:CB:AE:50:09:40:E6:1F:AF:9D:8B:14:C2:C6",
         "authorityInfoAccess": "OCSP - URI:http://r3.o.lencr.org\nCA Issuers - URI:http://r3.i.lencr.org/",
         "subjectAltName": "DNS:boppreh.com",
         "certificatePolicies": "Policy: 2.23.140.1.2.1",
-        "ct_precert_scts": "Signed Certificate Timestamp:\n    Version   : v1 (0x0)\n    Log ID    : 7A:32:8C:54:D8:B7:2D:B6:20:EA:38:E0:52:1E:E9:84:\n                16:70:32:13:85:4D:3B:D2:2B:C1:3A:57:A3:52:EB:52\n    Timestamp : Sep 18 11:42:02.639 2023 GMT\n    Extensions: none\n    Signature : ecdsa-with-SHA256\n                30:46:02:21:00:BB:06:8C:8A:86:0A:D6:B1:1D:65:71:\n                FF:69:79:67:FF:87:9B:95:BD:4B:47:A1:2D:C1:9E:73:\n                B0:89:87:EA:BD:02:21:00:9F:DA:17:BE:7E:11:23:EA:\n                21:A5:47:39:92:63:20:BE:3A:06:44:F9:57:80:D3:A3:\n                97:E4:C1:EC:41:D8:C3:FC\nSigned Certificate Timestamp:\n    Version   : v1 (0x0)\n    Log ID    : E8:3E:D0:DA:3E:F5:06:35:32:E7:57:28:BC:89:6B:C9:\n                03:D3:CB:D1:11:6B:EC:EB:69:E1:77:7D:6D:06:BD:6E\n    Timestamp : Sep 18 11:42:02.639 2023 GMT\n    Extensions: none\n    Signature : ecdsa-with-SHA256\n                30:45:02:20:1E:25:A7:43:E0:5F:A9:E6:25:4F:9B:00:\n                F8:39:ED:EC:B7:45:4D:85:C4:84:B1:FB:3E:46:A9:92:\n                21:F1:B8:1E:02:21:00:8D:CD:76:4B:FE:A5:CB:8C:DA:\n                1F:F9:BB:A9:48:62:9B:4E:43:AE:00:E7:A4:51:50:3D:\n                BD:AA:78:68:41:34:A1"
+        "ct_precert_scts": "Signed Certificate Timestamp:\n    Version   : v1 (0x0)\n    Log ID    : 3B:53:77:75:3E:2D:B9:80:4E:8B:30:5B:06:FE:40:3B:\n                67:D8:4F:C3:F4:C7:BD:00:0D:2D:72:6F:E1:FA:D4:17\n    Timestamp : Nov 17 10:47:19.570 2023 GMT\n    Extensions: none\n    Signature : ecdsa-with-SHA256\n                30:45:02:20:68:04:CC:39:20:39:86:6B:0D:BE:43:39:\n                00:8A:3B:52:0E:4B:02:3E:EB:0D:02:3F:83:48:09:91:\n                C0:51:3A:86:02:21:00:C1:A4:E6:BB:07:4D:2E:AB:3F:\n                D0:37:86:6C:A8:9B:1F:54:E0:6A:8D:89:96:2A:71:7C:\n                D2:D3:AE:C6:AF:B4:30\nSigned Certificate Timestamp:\n    Version   : v1 (0x0)\n    Log ID    : 76:FF:88:3F:0A:B6:FB:95:51:C2:61:CC:F5:87:BA:34:\n                B4:A4:CD:BB:29:DC:68:42:0A:9F:E6:67:4C:5A:3A:74\n    Timestamp : Nov 17 10:47:19.673 2023 GMT\n    Extensions: none\n    Signature : ecdsa-with-SHA256\n                30:46:02:21:00:AB:6C:29:44:FF:46:49:BE:05:DD:54:\n                18:84:63:9F:37:B1:39:2B:28:85:BE:0D:39:17:B4:C0:\n                7D:8F:2F:12:B8:02:21:00:8C:0F:B4:01:D8:8A:B3:44:\n   
+             FD:AB:0B:42:69:2A:94:B4:C6:F7:99:C2:08:B3:B3:7C:\n                44:59:1A:DD:B0:C7:79:99"
       }
     },
     {
@@ -159,10 +194,20 @@ python -m hello_tls boppreh.com
         "O": "Internet Security Research Group",
         "CN": "ISRG Root X1"
       },
+      "subject_alternative_names": [],
       "key_type": "RSA",
       "key_length_in_bits": 2048,
-      "not_before": "2020-09-04T00:00:00",
-      "not_after": "2025-09-15T16:00:00",
+      "all_key_usage": [
+        "Digital Signature",
+        "Certificate Sign",
+        "CRL Sign",
+        "TLS Web Client Authentication",
+        "TLS Web Server Authentication"
+      ],
+      "not_before": "2020-09-04 00:00:00+00:00",
+      "not_after": "2025-09-15 16:00:00+00:00",
+      "is_expired": false,
+      "days_until_expiration": 609,
       "signature_algorithm": "sha256WithRSAEncryption",
       "extensions": {
         "keyUsage": "Digital Signature, Certificate Sign, CRL Sign",
@@ -187,10 +232,17 @@ python -m hello_tls boppreh.com
         "O": "Digital Signature Trust Co.",
         "CN": "DST Root CA X3"
       },
+      "subject_alternative_names": [],
       "key_type": "RSA",
       "key_length_in_bits": 4096,
-      "not_before": "2021-01-20T19:14:03",
-      "not_after": "2024-09-30T18:14:03",
+      "all_key_usage": [
+        "Certificate Sign",
+        "CRL Sign"
+      ],
+      "not_before": "2021-01-20 19:14:03+00:00",
+      "not_after": "2024-09-30 18:14:03+00:00",
+      "is_expired": false,
+      "days_until_expiration": 259,
       "signature_algorithm": "sha256WithRSAEncryption",
       "extensions": {
         "basicConstraints": "CA:TRUE",
