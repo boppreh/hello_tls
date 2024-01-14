@@ -219,7 +219,7 @@ def get_server_certificate_chain(connection_settings: ConnectionSettings, client
             extension = raw_cert.get_extension(i)
             try:
                 value = str(extension)
-            except:
+            except crypto.Error:
                 value = extension.get_data().hex(':')
             extensions[extension.get_short_name().decode('utf-8')] = value
 
