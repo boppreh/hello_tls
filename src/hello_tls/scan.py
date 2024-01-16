@@ -90,10 +90,10 @@ def send_hello(connection_settings: ConnectionSettings, client_hello: ClientHell
         while True:
             try:
                 packet = sock.recv(4096)
-            except ConnectionResetError as e:
+            except (TimeoutError, ConnectionResetError) as e:
+                # tiktok.com times out when no matching groups are found.
+                # live.com sends a RST packet when no matching protocols are found.
                 raise EmptyServerResponse() from e
-            except TimeoutError as e:
-                raise ConnectionError()
             bytes_read += len(packet)
             if packet:
                 yield packet
@@ -221,6 +221,7 @@ def get_server_certificate_chain(connection_settings: ConnectionSettings, client
                     raise ConnectionError('Timed out during handshake for certificate chain') from e
                 continue
             except (SSL.Error, SSL.SysCallError) as e:
+                # live.com sends a RST packet when no matching protocols are found.
                 raise ConnectionError(f'OpenSSL exception during handshake for certificate chain: {e}') from e
         connection.shutdown()
 
