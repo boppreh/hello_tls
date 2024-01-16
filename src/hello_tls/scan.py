@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import dataclasses
 from datetime import datetime, timezone
-from .protocol import ClientHello, EmptyServerResponse, ScanError, make_client_hello, parse_server_hello, ServerAlertError, BadServerResponse, ServerHello, logger
+from .protocol import ClientHello, ScanError, make_client_hello, parse_server_hello, ServerAlertError, BadServerResponse, ServerHello, logger
 from .names_and_numbers import AlertDescription, CipherSuite, Group, Protocol, CompressionMethod
 
 # Default number of workers/threads/concurrent connections to use.
@@ -26,6 +26,10 @@ class ConnectionError(ScanError):
 
 class ProxyError(ConnectionError):
     """ Class for errors in connecting through a proxy. """
+    pass
+
+class EmptyServerResponse(ScanError):
+    """ Error for servers that close the connection without sending any data. """
     pass
 
 @dataclasses.dataclass
@@ -81,8 +85,23 @@ def send_hello(connection_settings: ConnectionSettings, client_hello: ClientHell
     sock = make_socket(connection_settings)
     sock.send(make_client_hello(client_hello))
 
-    packet_stream = iter(lambda: sock.recv(4096), b'')
-    server_hello = parse_server_hello(packet_stream)
+    def packet_stream() -> Iterator[bytes]:
+        bytes_read = 0
+        while True:
+            try:
+                packet = sock.recv(4096)
+            except ConnectionResetError as e:
+                raise EmptyServerResponse() from e
+            except TimeoutError as e:
+                raise ConnectionError()
+            bytes_read += len(packet)
+            if packet:
+                yield packet
+            elif bytes_read == 0:
+                raise EmptyServerResponse()
+            else:
+                break
+    server_hello = parse_server_hello(packet_stream())
     
     if server_hello.version not in client_hello.protocols:
         # Server picked a protocol we didn't ask for.
@@ -201,7 +220,7 @@ def get_server_certificate_chain(connection_settings: ConnectionSettings, client
                 if not rd:
                     raise ConnectionError('Timed out during handshake for certificate chain') from e
                 continue
-            except SSL.Error as e:
+            except (SSL.Error, SSL.SysCallError) as e:
                 raise ConnectionError(f'OpenSSL exception during handshake for certificate chain: {e}') from e
         connection.shutdown()
 

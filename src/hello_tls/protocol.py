@@ -21,10 +21,6 @@ class BadServerResponse(ScanError):
     """ Error for server responses that can't be parsed. """
     pass
 
-class EmptyServerResponse(BadServerResponse):
-    """ Error for server responses that are empty. """
-    pass
-
 @dataclass
 class ServerHello:
     version: Protocol
@@ -45,10 +41,7 @@ def _make_stream_parser(packets: Iterable[bytes]) -> Tuple[Callable[[int], bytes
             try:
                 data += next(packets_iter)
             except StopIteration:
-                if start == 0:
-                    raise EmptyServerResponse('Server response was unexpectedly empty')
-                else:
-                    raise BadServerResponse('Server response ended unexpectedly')
+                raise BadServerResponse('Server response ended unexpectedly')
         value = data[start:start+length]
         start += length
         return value
