@@ -20,6 +20,9 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
+[project.scripts]
+hello_tls = "hello_tls.__main__:main"
+
 [project.urls]
 "Homepage" = "https://github.com/boppreh/hello_tls"
 "Bug Tracker" = "https://github.com/boppreh/hello_tls/issues"
