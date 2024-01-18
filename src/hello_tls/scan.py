@@ -181,6 +181,7 @@ class Certificate:
     days_until_expiration: int
     signature_algorithm: str
     extensions: dict[str, str]
+    pem: str
     
 def get_server_certificate_chain(connection_settings: ConnectionSettings, client_hello: ClientHello) -> Iterable[Certificate]:
     """
@@ -255,6 +256,7 @@ def get_server_certificate_chain(connection_settings: ConnectionSettings, client
         days_until_expiration = (not_after - connection_settings.date).days
 
         yield Certificate(
+            pem=crypto.dump_certificate(crypto.FILETYPE_PEM, raw_cert).decode('utf-8'),
             serial_number=str(raw_cert.get_serial_number()),
             subject=_x509_name_to_dict(raw_cert.get_subject()),
             issuer=_x509_name_to_dict(raw_cert.get_issuer()),
