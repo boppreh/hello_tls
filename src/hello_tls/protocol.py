@@ -81,7 +81,11 @@ def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
     group = None
 
     while start < extensions_end:
-        extension_type = ExtensionType(read_next(2))
+        try:
+            extension_type = ExtensionType(read_next(2))
+        except ValueError:
+            # Ignore unknown extensions.
+            continue
         extension_data_length = read_next(2)
         extension_data = read_next(_bytes_to_int(extension_data_length))
         if extension_type == ExtensionType.supported_versions:

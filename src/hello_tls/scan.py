@@ -131,12 +131,10 @@ def _iterate_server_option(connection_settings: ConnectionSettings, client_hello
             logger.debug(f"Offering {len(options_to_test)} {response_option} over {client_hello.protocols}: {options_to_test}")
             server_hello = send_hello(connection_settings, client_hello)
             on_response(server_hello)
-        except (DowngradeError, EmptyServerResponse):
+        except (ServerAlertError, DowngradeError, EmptyServerResponse):
+            # ServerAlertError could technically be raised for a variety of reasons, but in practice
+            # there's too much variation on how servers pick Alert Descriptions to reject a handshake.
             break
-        except ServerAlertError as error:
-            if error.description in [AlertDescription.protocol_version, AlertDescription.handshake_failure, AlertDescription.close_notify]:
-                break
-            raise
 
         accepted_option = getattr(server_hello, response_option)
         if accepted_option is None or accepted_option not in options_to_test:
