@@ -101,7 +101,11 @@ def send_hello(connection_settings: ConnectionSettings, client_hello: ClientHell
                 raise EmptyServerResponse()
             else:
                 break
-    server_hello = parse_server_hello(packet_stream())
+
+    try:
+        server_hello = parse_server_hello(packet_stream())
+    except ValueError as e:
+        raise BadServerResponse('Error parsing server response') from e
     
     if server_hello.version not in client_hello.protocols:
         # Server picked a protocol we didn't ask for.
