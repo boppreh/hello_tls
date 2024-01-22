@@ -75,7 +75,10 @@ def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
     session_id = read_next(_bytes_to_int(session_id_length))
     cipher_suite = CipherSuite(read_next(2))
     compression_method = CompressionMethod(read_next(1))
-    extensions_length = _bytes_to_int(read_next(2))
+    if start + 2 <= record_end:
+        extensions_length = _bytes_to_int(read_next(2))
+    else: # extensions may not be present in TLS 1.2 and lower
+        extensions_length = 0
     extensions_end = start + extensions_length
 
     group = None
