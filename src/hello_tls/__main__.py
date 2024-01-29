@@ -1,4 +1,4 @@
-from .scan import scan_server, DEFAULT_TIMEOUT, DEFAULT_MAX_WORKERS, parse_target, ConnectionSettings, to_json_obj
+from .scan import scan_server, ScanError, DEFAULT_TIMEOUT, DEFAULT_MAX_WORKERS, parse_target, ConnectionSettings, to_json_obj
 from .protocol import ClientHello
 from .names_and_numbers import Protocol
 
@@ -48,22 +48,28 @@ if args.progress:
 else:
     progress = lambda current, total: None
 
-results = scan_server(
-    ConnectionSettings(
-        host=host,
-        port=port,
-        proxy=proxy,
-        timeout_in_seconds=args.timeout
-    ),
-    ClientHello(
-        protocols=protocols,
-        server_name=args.server_name_indication or host
-    ),
-    do_enumerate_cipher_suites=args.enumerate_cipher_suites,
-    do_enumerate_groups=args.enumerate_groups,
-    fetch_cert_chain=args.certs,
-    max_workers=args.max_workers,
-    progress=progress,
-)
-
-json.dump(to_json_obj(results), sys.stdout, indent=2)
+try:
+    results = scan_server(
+        ConnectionSettings(
+            host=host,
+            port=port,
+            proxy=proxy,
+            timeout_in_seconds=args.timeout
+        ),
+        ClientHello(
+            protocols=protocols,
+            server_name=args.server_name_indication or host
+        ),
+        do_enumerate_cipher_suites=args.enumerate_cipher_suites,
+        do_enumerate_groups=args.enumerate_groups,
+        fetch_cert_chain=args.certs,
+        max_workers=args.max_workers,
+        progress=progress,
+    )
+    json.dump(to_json_obj(results), sys.stdout, indent=2)
+except ScanError as e:
+    print(f'Scan error: {e.args[0]}', file=sys.stderr)
+    if args.verbose > 0:
+        raise
+    else:
+        exit(1)
