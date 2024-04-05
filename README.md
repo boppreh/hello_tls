@@ -21,8 +21,8 @@ or clone this repo:
 
 ```bash
 git clone https://github.com/boppreh/hello_tls.git
-cd hello_tls
-python hello_tls.py boppreh.com
+cd hello_tls/src
+python -m hello_tls boppreh.com --no-certs
 ```
 
 ## As a library
