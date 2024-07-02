@@ -7,7 +7,7 @@ import sys
 import json
 import logging
 import argparse
-parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser = argparse.ArgumentParser(prog="python -m hello_tls", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("target", help="server to scan, in the form of 'example.com', 'example.com:443', or even a full URL")
 parser.add_argument("--timeout", "-t", dest="timeout", type=float, default=DEFAULT_TIMEOUT, help="socket connection timeout in seconds")
 parser.add_argument("--max-workers", "-w", type=int, default=DEFAULT_MAX_WORKERS, help="maximum number of threads/concurrent connections to use for scanning")
