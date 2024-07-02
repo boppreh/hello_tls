@@ -23,3 +23,12 @@ classifiers = [
 [project.urls]
 "Homepage" = "https://github.com/boppreh/hello_tls"
 "Bug Tracker" = "https://github.com/boppreh/hello_tls/issues"
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "src"
+]
+
+[tool.coverage.run]
+branch = true
+command_line = "-m pytest"

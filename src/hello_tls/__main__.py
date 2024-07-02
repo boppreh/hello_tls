@@ -7,6 +7,7 @@ import sys
 import json
 import logging
 import argparse
+from typing import Optional
 parser = argparse.ArgumentParser(prog="python -m hello_tls", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("target", help="server to scan, in the form of 'example.com', 'example.com:443', or even a full URL")
 parser.add_argument("--timeout", "-t", dest="timeout", type=float, default=DEFAULT_TIMEOUT, help="socket connection timeout in seconds")
@@ -49,6 +50,7 @@ if args.progress:
 else:
     progress = lambda current, total: None
 
+server_name: Optional[str]
 if args.server_name_indication is None:
     # Argument unset, default to host.
     server_name = host
