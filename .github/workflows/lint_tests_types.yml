@@ -1,7 +1,7 @@
 # This workflow will install Python dependencies, run tests and lint with a single version of Python
 # For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
 
-name: Lint and verify type annotations
+name: Lint, run tests, and verify type annotations
 
 on:
   push:
@@ -38,3 +38,7 @@ jobs:
     - name: Check type annotations
       run: |
         mypy --install-types --non-interactive --check-untyped-defs src --cache-dir=.mypy_cache/
+    - name: Test with pytest
+      run: |
+        pip install pytest pytest-cov
+        pytest ./tests --doctest-modules --junitxml=junit/test-results.xml --cov=com --cov-report=xml --cov-report=html
