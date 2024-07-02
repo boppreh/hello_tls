@@ -11,10 +11,11 @@ parser = argparse.ArgumentParser(prog="python -m hello_tls", formatter_class=arg
 parser.add_argument("target", help="server to scan, in the form of 'example.com', 'example.com:443', or even a full URL")
 parser.add_argument("--timeout", "-t", dest="timeout", type=float, default=DEFAULT_TIMEOUT, help="socket connection timeout in seconds")
 parser.add_argument("--max-workers", "-w", type=int, default=DEFAULT_MAX_WORKERS, help="maximum number of threads/concurrent connections to use for scanning")
-parser.add_argument("--server-name-indication", "-s", default='', help="value to be used in the SNI extension, defaults to the target host")
+parser.add_argument("--server-name-indication", "-s", default=None, help="value to be used in the SNI extension, defaults to the target host")
+parser.add_argument("--test-sni", default=True, action=argparse.BooleanOptionalAction, help="also attempt handshakes with missing and wrong SNI")
 parser.add_argument("--certs", "-c", default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
-parser.add_argument("--enumerate-cipher-suites", "-C", dest='enumerate_cipher_suites', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites")
-parser.add_argument("--enumerate-groups", "-G", dest='enumerate_groups', default=True, action=argparse.BooleanOptionalAction, help="enumerate supported groups")
+parser.add_argument("--enumerate-cipher-suites", "-C", default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites")
+parser.add_argument("--enumerate-groups", "-G", default=True, action=argparse.BooleanOptionalAction, help="enumerate supported groups")
 parser.add_argument("--protocols", "-p", dest='protocols_str', default=','.join(p.name for p in Protocol), help="comma separated list of TLS/SSL protocols to test")
 parser.add_argument("--proxy", default=None, help="HTTP proxy to use for the connection, defaults to the env variable 'http_proxy' else no proxy")
 parser.add_argument("--verbose", "-v", action="count", default=0, help="increase output verbosity")
@@ -58,10 +59,11 @@ try:
         ),
         ClientHello(
             protocols=protocols,
-            server_name=args.server_name_indication or host
+            server_name=host if args.server_name_indication is None else args.server_name_indication
         ),
         do_enumerate_cipher_suites=args.enumerate_cipher_suites,
         do_enumerate_groups=args.enumerate_groups,
+        do_test_sni=args.test_sni,
         fetch_cert_chain=args.certs,
         max_workers=args.max_workers,
         progress=progress,

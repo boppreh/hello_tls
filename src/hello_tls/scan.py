@@ -114,6 +114,17 @@ def send_hello(connection_settings: ConnectionSettings, client_hello: ClientHell
     
     return server_hello
 
+def try_send_hello(connection_settings: ConnectionSettings, client_hello: ClientHello) -> Optional[ServerHello]:
+    """
+    Identical to `send_hello` but returns None instead of raising errors when the connection is cleanly rejected.
+    """
+    try:
+        return send_hello(connection_settings, client_hello)
+    except (ServerAlertError, DowngradeError, EmptyServerResponse):
+        # ServerAlertError could technically be raised for a variety of reasons, but in practice
+        # there's too much variation on how servers pick Alert Descriptions to reject a handshake.
+        return None
+
 def _iterate_server_option(connection_settings: ConnectionSettings, client_hello: ClientHello, request_option: str, response_option: str, on_response: Callable[[ServerHello], None] = lambda s: None) -> Iterator[Any]:
     """
     Continually sends Client Hello packets to the server, removing the `response_option` from the list of options each time,
@@ -127,14 +138,14 @@ def _iterate_server_option(connection_settings: ConnectionSettings, client_hello
     logger.info(f"Enumerating server {response_option} with {len(options_to_test)} options and protocols {client_hello.protocols}")
 
     while options_to_test:
-        try:
-            logger.debug(f"Offering {len(options_to_test)} {response_option} over {client_hello.protocols}: {options_to_test}")
-            server_hello = send_hello(connection_settings, client_hello)
-            on_response(server_hello)
-        except (ServerAlertError, DowngradeError, EmptyServerResponse):
-            # ServerAlertError could technically be raised for a variety of reasons, but in practice
-            # there's too much variation on how servers pick Alert Descriptions to reject a handshake.
+        logger.debug(f"Offering {len(options_to_test)} {response_option} over {client_hello.protocols}: {options_to_test}")
+
+        server_hello = try_send_hello(connection_settings, client_hello)
+
+        if not server_hello:
             break
+
+        on_response(server_hello)
 
         accepted_option = getattr(server_hello, response_option)
         if accepted_option is None or accepted_option not in options_to_test:
@@ -321,12 +332,15 @@ class ServerScanResult:
     protocols: dict[Protocol, Optional[ProtocolResult]]
     certificate_chain: list[Certificate]
     client_ca_names: list[dict]
+    requires_sni: Optional[bool]
+    accepts_bad_sni: Optional[bool]
 
 def scan_server(
     connection_settings: Union[ConnectionSettings, str],
     client_hello: Optional[ClientHello] = None,
     do_enumerate_cipher_suites: bool = True,
     do_enumerate_groups: bool = True,
+    do_test_sni: bool = True,
     fetch_cert_chain: bool = True,
     max_workers: int = DEFAULT_MAX_WORKERS,
     progress: Callable[[int, int], None] = lambda current, total: None,
@@ -346,8 +360,16 @@ def scan_server(
     if not client_hello:
         client_hello = ClientHello(server_name=connection_settings.host)            
 
-    tmp_openssl_response: Optional[OpenSSLResponse] = None
     tmp_protocol_results = {p: ProtocolResult(False, None, None, None, None) for p in Protocol}
+
+    result = ServerScanResult(
+        connection=connection_settings,
+        protocols={},
+        certificate_chain=[],
+        client_ca_names=[],
+        requires_sni=None,
+        accepts_bad_sni=None
+    )
 
     with ThreadPool(max_workers) as pool:
         logger.debug("Initializing workers")
@@ -378,10 +400,21 @@ def scan_server(
             # Must be extracted to a function to avoid late binding in task lambdas.
             scan_protocol(protocol)
 
+        if do_test_sni:
+            # Send Client Hello with missing/wrong SNI.
+            def task():
+                #logger.debug(f"Sending Client Hello with no Server Name Indication")
+                #result.requires_sni = not try_send_hello(connection_settings, dataclasses.replace(client_hello, server_name=None))
+
+                logger.debug(f"Sending Client Hello with bad Server Name Indication")
+                result.accepts_bad_sni = bool(try_send_hello(connection_settings, dataclasses.replace(client_hello, server_name='bad-sni.example.com')))
+            tasks.append(task)
+
         if fetch_cert_chain:
             def do_openssl_handshake():
-                nonlocal tmp_openssl_response
-                tmp_openssl_response = get_openssl_response(connection_settings, client_hello)
+                openssl_response = get_openssl_response(connection_settings, client_hello)
+                result.client_ca_names = openssl_response.client_ca_names
+                result.certificate_chain = openssl_response.server_certificate_chain
             tasks.append(do_openssl_handshake)
 
         if max_workers > len(tasks):
@@ -391,13 +424,6 @@ def scan_server(
         for i, _ in enumerate(pool.imap_unordered(lambda t: t(), tasks)):
             progress(i+1, len(tasks))
 
-    result = ServerScanResult(
-        connection=connection_settings,
-        protocols={},
-        certificate_chain=tmp_openssl_response.server_certificate_chain if tmp_openssl_response else [],
-        client_ca_names=tmp_openssl_response.client_ca_names if tmp_openssl_response else [],
-    )
-
     # Finish processing the Server Hellos to detect compression and cipher suite order.
     for protocol, protocol_result in tmp_protocol_results.items():
         if not protocol_result.cipher_suites and not protocol_result.groups:
@@ -405,7 +431,7 @@ def scan_server(
             continue
 
         result.protocols[protocol] = protocol_result
-
+        
         sample_hello = (protocol_result._cipher_suite_hellos or protocol_result._group_hellos)[0]
         protocol_result.has_compression = sample_hello.compression != CompressionMethod.NULL
 
