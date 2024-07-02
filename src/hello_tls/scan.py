@@ -330,10 +330,10 @@ class ProtocolResult:
 class ServerScanResult:
     connection: ConnectionSettings
     protocols: dict[Protocol, Optional[ProtocolResult]]
-    certificate_chain: list[Certificate]
-    client_ca_names: list[dict]
     requires_sni: Optional[bool]
     accepts_bad_sni: Optional[bool]
+    client_ca_names: list[dict]
+    certificate_chain: list[Certificate]
 
 def scan_server(
     connection_settings: Union[ConnectionSettings, str],
@@ -357,7 +357,6 @@ def scan_server(
         
     logger.info(f"Scanning {connection_settings.host}:{connection_settings.port}")
 
-    print(client_hello)
     if not client_hello:
         client_hello = ClientHello(server_name=connection_settings.host)            
 
