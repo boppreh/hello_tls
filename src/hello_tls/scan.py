@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import dataclasses
 from datetime import datetime, timezone
-from .protocol import ClientHello, ScanError, make_client_hello, parse_server_hello, ServerAlertError, BadServerResponse, ServerHello, logger
+from .protocol import ClientHello, ScanError, make_client_hello, parse_server_hello, ServerAlertError, ServerHelloRetryRequestError, BadServerResponse, ServerHello, logger
 from .names_and_numbers import AlertDescription, CipherSuite, Group, Protocol, CompressionMethod
 
 # Default number of workers/threads/concurrent connections to use.
@@ -120,7 +120,7 @@ def try_send_hello(connection_settings: ConnectionSettings, client_hello: Client
     """
     try:
         return send_hello(connection_settings, client_hello)
-    except (ServerAlertError, DowngradeError, EmptyServerResponse):
+    except (ServerHelloRetryRequestError, ServerAlertError, DowngradeError, EmptyServerResponse):
         # ServerAlertError could technically be raised for a variety of reasons, but in practice
         # there's too much variation on how servers pick Alert Descriptions to reject a handshake.
         return None
@@ -357,6 +357,7 @@ def scan_server(
         
     logger.info(f"Scanning {connection_settings.host}:{connection_settings.port}")
 
+    print(client_hello)
     if not client_hello:
         client_hello = ClientHello(server_name=connection_settings.host)            
 
@@ -403,8 +404,8 @@ def scan_server(
         if do_test_sni:
             # Send Client Hello with missing/wrong SNI.
             def task():
-                #logger.debug(f"Sending Client Hello with no Server Name Indication")
-                #result.requires_sni = not try_send_hello(connection_settings, dataclasses.replace(client_hello, server_name=None))
+                logger.debug(f"Sending Client Hello with no Server Name Indication")
+                result.requires_sni = not try_send_hello(connection_settings, dataclasses.replace(client_hello, server_name=None))
 
                 logger.debug(f"Sending Client Hello with bad Server Name Indication")
                 result.accepts_bad_sni = bool(try_send_hello(connection_settings, dataclasses.replace(client_hello, server_name='bad-sni.example.com')))

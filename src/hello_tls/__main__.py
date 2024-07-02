@@ -11,7 +11,7 @@ parser = argparse.ArgumentParser(prog="python -m hello_tls", formatter_class=arg
 parser.add_argument("target", help="server to scan, in the form of 'example.com', 'example.com:443', or even a full URL")
 parser.add_argument("--timeout", "-t", dest="timeout", type=float, default=DEFAULT_TIMEOUT, help="socket connection timeout in seconds")
 parser.add_argument("--max-workers", "-w", type=int, default=DEFAULT_MAX_WORKERS, help="maximum number of threads/concurrent connections to use for scanning")
-parser.add_argument("--server-name-indication", "-s", default=None, help="value to be used in the SNI extension, defaults to the target host")
+parser.add_argument("--server-name-indication", "-s", default=None, help="value to be used in the SNI extension, defaults to the target host, pass empty string to not send SNI")
 parser.add_argument("--test-sni", default=True, action=argparse.BooleanOptionalAction, help="also attempt handshakes with missing and wrong SNI")
 parser.add_argument("--certs", "-c", default=True, action=argparse.BooleanOptionalAction, help="fetch the certificate chain using pyOpenSSL")
 parser.add_argument("--enumerate-cipher-suites", "-C", default=True, action=argparse.BooleanOptionalAction, help="enumerate supported cipher suites")
@@ -49,6 +49,15 @@ if args.progress:
 else:
     progress = lambda current, total: None
 
+if args.server_name_indication is None:
+    # Argument unset, default to host.
+    server_name = host
+elif args.server_name_indication == '':
+    # Argument explicitly set to empty string, interpret as "no SNI".
+    server_name = None
+else:
+    server_name = args.server_name_indication
+
 try:
     results = scan_server(
         ConnectionSettings(
@@ -59,7 +68,7 @@ try:
         ),
         ClientHello(
             protocols=protocols,
-            server_name=host if args.server_name_indication is None else args.server_name_indication
+            server_name=server_name
         ),
         do_enumerate_cipher_suites=args.enumerate_cipher_suites,
         do_enumerate_groups=args.enumerate_groups,
