@@ -68,7 +68,9 @@ def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
         alert_description = AlertDescription(read_next(1))
         raise ServerAlertError(alert_level, alert_description)
     
-    assert record_type == RecordType.HANDSHAKE, record_type
+    if record_type != RecordType.HANDSHAKE:
+        raise BadServerResponse(f'Server responded with unexpected Record Type, expected {RecordType.HANDSHAKE} but got {record_type}')
+    
     handshake_type = HandshakeType(read_next(1))
     assert handshake_type == HandshakeType.server_hello, handshake_type
     server_hello_length = _bytes_to_int(read_next(3))
