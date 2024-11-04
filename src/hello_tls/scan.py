@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import dataclasses
 from datetime import datetime, timezone
-from .protocol import ClientHello, ScanError, make_client_hello, parse_server_hello, ServerAlertError, ServerHelloRetryRequestError, BadServerResponse, ServerHello, logger
+from .protocol import ClientHello, ScanError, make_client_hello, parse_server_hello, ServerAlertError, BadServerResponse, ServerHello, logger
 from .names_and_numbers import AlertDescription, CipherSuite, Group, Protocol, CompressionMethod
 
 # Default number of workers/threads/concurrent connections to use.
@@ -120,9 +120,10 @@ def try_send_hello(connection_settings: ConnectionSettings, client_hello: Client
     """
     try:
         return send_hello(connection_settings, client_hello)
-    except (ServerHelloRetryRequestError, ServerAlertError, DowngradeError, EmptyServerResponse):
+    except (ServerAlertError, DowngradeError, EmptyServerResponse) as e:
         # ServerAlertError could technically be raised for a variety of reasons, but in practice
         # there's too much variation on how servers pick Alert Descriptions to reject a handshake.
+        logger.debug(f'Server responded with error {e!r}')
         return None
 
 def _iterate_server_option(connection_settings: ConnectionSettings, client_hello: ClientHello, request_option: str, response_option: str, on_response: Callable[[ServerHello], None] = lambda s: None) -> Iterator[Any]:

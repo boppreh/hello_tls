@@ -17,10 +17,6 @@ class ServerAlertError(ScanError):
         self.level = level
         self.description = description
 
-class ServerHelloRetryRequestError(ScanError):
-    """ Raised by the server when it cannot accept the connection request as-is. """
-    pass
-
 class BadServerResponse(ScanError):
     """ Error for server responses that can't be parsed. """
     pass
@@ -28,6 +24,7 @@ class BadServerResponse(ScanError):
 @dataclass
 class ServerHello:
     version: Protocol
+    is_retry_request: bool
     compression: CompressionMethod
     cipher_suite: CipherSuite
     group: Optional[Group]
@@ -78,10 +75,9 @@ def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
     version = Protocol(read_next(2))
     server_random = read_next(32)
 
-    if server_random == b'\xCF\x21\xAD\x74\xE5\x9A\x61\x11\xBE\x1D\x8C\x02\x1E\x65\xB8\x91\xC2\xA2\x11\x16\x7A\xBB\x8C\x5E\x07\x9E\x09\xE2\xC8\xA8\x33\x9C':
-        # Magic value meaning Hello Retry Request (see https://datatracker.ietf.org/doc/html/rfc8446#section-4.1.4 ).
-        # It's an error, but represented in server_random to maintain backwards compatibility.
-        raise ServerHelloRetryRequestError()
+    # Magic value meaning Hello Retry Request (see https://datatracker.ietf.org/doc/html/rfc8446#section-4.1.4 ).
+    # It's an error, but represented in server_random to maintain backwards compatibility.
+    is_retry_request = server_random == b'\xCF\x21\xAD\x74\xE5\x9A\x61\x11\xBE\x1D\x8C\x02\x1E\x65\xB8\x91\xC2\xA2\x11\x16\x7A\xBB\x8C\x5E\x07\x9E\x09\xE2\xC8\xA8\x33\x9C'
 
     session_id_length = read_next(1)
     session_id = read_next(_bytes_to_int(session_id_length))
@@ -112,7 +108,7 @@ def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
                 logger.warning(f'Unknown group: {extension_data[:2]!r}')
                 pass
     
-    return ServerHello(version, compression_method, cipher_suite, group)
+    return ServerHello(version, is_retry_request, compression_method, cipher_suite, group)
 
 @dataclass
 class ClientHello:
