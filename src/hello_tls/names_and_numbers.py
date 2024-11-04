@@ -114,6 +114,8 @@ class Group(Enum):
     X25519Kyber768Draft00_obsolete = b'\xfe\x31', True
     X25519Kyber512Draft00 = b'\xfe\x30', True
     SecP256r1Kyber768Draft00 = b'\x63\x9a', True
+    X25519MLKEM768 = b'\x11\xec', True # https://datatracker.ietf.org/doc/draft-kwiatkowski-tls-ecdhe-mlkem/02/
+    SecP256r1MLKEM768 = b'\x11\xeb', True
 
     # Long list of unusual post-quantum groups from liboqs:
     # https://github.com/open-quantum-safe/oqs-provider/blob/main/ALGORITHMS.md?plain=1#L13
@@ -141,6 +143,17 @@ class Group(Enum):
     x448_kyber768 = b'\x2F\x90', True
     kyber1024 = b'\x02\x3D', True
     p521_kyber1024 = b'\x2F\x3D', True
+    mlkem512 = b'\x02\x4A', True
+    p256_mlkem512 = b'\x2F\x4B', True
+    x25519_mlkem512 = b'\x2F\xB6', True
+    mlkem768 = b'\x07\x68', True
+    p384_mlkem768 = b'\x2F\x4C', True
+    x448_mlkem768 = b'\x2F\xB7', True
+    x25519_mlkem768 = b'\x2F\xB8', True
+    p256_mlkem768 = b'\x45\x87', True
+    mlkem1024 = b'\x10\x24', True
+    p521_mlkem1024 = b'\x2F\x4D', True
+    p384_mlkem1024 = b'\x2F\x4E', True
     bikel1 = b'\x02\x41', True
     p256_bikel1 = b'\x2F\x41', True
     x25519_bikel1 = b'\x2F\xAE', True
@@ -149,14 +162,14 @@ class Group(Enum):
     x448_bikel3 = b'\x2F\xAF', True
     bikel5 = b'\x02\x43', True
     p521_bikel5 = b'\x2F\x43', True
-    hqc128 = b'\x02\x2C', True
-    p256_hqc128 = b'\x2F\x2C', True
-    x25519_hqc128 = b'\x2F\xAC', True
-    hqc192 = b'\x02\x2D', True
-    p384_hqc192 = b'\x2F\x2D', True
-    x448_hqc192 = b'\x2F\xAD', True
-    hqc256 = b'\x02\x2E', True
-    p521_hqc256 = b'\x2F\x2E', True
+    hqc128 = b'\x02\x44', True
+    p256_hqc128 = b'\x2F\x44', True
+    x25519_hqc128 = b'\x2F\xB0', True
+    hqc192 = b'\x02\x45', True
+    p384_hqc192 = b'\x2F\x45', True
+    x448_hqc192 = b'\x2F\xB1', True
+    hqc256 = b'\x02\x46', True
+    p521_hqc256 = b'\x2F\x46', True
     dilithium2 = b'\xfe\xa0', True
     p256_dilithium2 = b'\xfe\xa1', True
     rsa3072_dilithium2 = b'\xfe\xa2', True
@@ -164,11 +177,23 @@ class Group(Enum):
     p384_dilithium3 = b'\xfe\xa4', True
     dilithium5 = b'\xfe\xa5', True
     p521_dilithium5 = b'\xfe\xa6', True
-    falcon512 = b'\xfe\xae', True
-    p256_falcon512 = b'\xfe\xaf', True
-    rsa3072_falcon512 = b'\xfe\xb0', True
-    falcon1024 = b'\xfe\xb1', True
-    p521_falcon1024 = b'\xfe\xb2', True
+    mldsa44 = b'\xfe\xd0', True
+    p256_mldsa44 = b'\xfe\xd3', True
+    rsa3072_mldsa44 = b'\xfe\xd4', True
+    mldsa65 = b'\xfe\xd1', True
+    p384_mldsa65 = b'\xfe\xd5', True
+    mldsa87 = b'\xfe\xd2', True
+    p521_mldsa87 = b'\xfe\xd6', True
+    falcon512 = b'\xfe\xd7', True
+    p256_falcon512 = b'\xfe\xd8', True
+    rsa3072_falcon512 = b'\xfe\xd9', True
+    falconpadded512 = b'\xfe\xdc', True
+    p256_falconpadded512 = b'\xfe\xdd', True
+    rsa3072_falconpadded512 = b'\xfe\xde', True
+    falcon1024 = b'\xfe\xda', True
+    p521_falcon1024 = b'\xfe\xdb', True
+    falconpadded1024 = b'\xfe\xdf', True
+    p521_falconpadded1024 = b'\xfe\xe0', True
     sphincssha2128fsimple = b'\xfe\xb3', True
     p256_sphincssha2128fsimple = b'\xfe\xb4', True
     rsa3072_sphincssha2128fsimple = b'\xfe\xb5', True
@@ -197,6 +222,14 @@ class Group(Enum):
     p521_sphincsshake256fsimple = b'\xfe\xcd', True
     sphincsshake256ssimple = b'\xfe\xce', True
     p521_sphincsshake256ssimple = b'\xfe\xcf', True
+    mayo1 = b'\xfe\xee', True
+    p256_mayo1 = b'\xfe\xf2', True
+    mayo2 = b'\xfe\xef', True
+    p256_mayo2 = b'\xfe\xf3', True
+    mayo3 = b'\xfe\xf0', True
+    p384_mayo3 = b'\xfe\xf4', True
+    mayo5 = b'\xfe\xf1', True
+    p521_mayo5 = b'\xfe\xf5', True
 
 class CipherSuite(Enum):
     def __repr__(self):
