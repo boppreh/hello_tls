@@ -28,7 +28,7 @@ class ServerHello:
     compression: CompressionMethod
     cipher_suite: CipherSuite
     group: Optional[Group]
-    certificate_der: list[bytes]
+    certificates_der: list[bytes]
 
 def _bytes_to_int(b: bytes) -> int:
     return int.from_bytes(b, byteorder='big')

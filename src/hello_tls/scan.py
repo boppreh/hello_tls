@@ -1,9 +1,13 @@
 from enum import Enum
 from multiprocessing.pool import ThreadPool
+import itertools
 import socket
 import re
 from typing import Iterable, Union, List, Optional, Iterator, Callable, Any
 from urllib.parse import urlparse
+
+from OpenSSL import SSL, crypto
+import select
 
 import dataclasses
 from datetime import datetime, timezone
@@ -203,62 +207,62 @@ class OpenSSLResponse:
     # List of CA's accepted for client certificates, as dictionary of X509 names.
     client_ca_names: list[dict]
 
+def _x509_name_to_dict(x509_name: crypto.X509Name) -> dict[str, str]:
+    return {name.decode('utf-8'): value.decode('utf-8') for name, value in x509_name.get_components()}
+
+def _x509_time_to_datetime(x509_time: Optional[bytes]) -> datetime:
+    if x509_time is None:
+        raise BadServerResponse('Timestamp cannot be None')
+    return datetime.strptime(x509_time.decode('ascii'), '%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc)
+
+def _raw_openssl_cert_to_certificate(raw_cert, current_date: datetime) -> Certificate:
+    """
+    Converts a "raw" pyOpenSSL certificate object into our Certificate dataclass.
+    """
+    _public_key_type_by_openssl_id = {crypto.TYPE_DH: 'DH', crypto.TYPE_DSA: 'DSA', crypto.TYPE_EC: 'EC', crypto.TYPE_RSA: 'RSA'}
+
+    extensions: dict[str, str] = {}
+    for i in range(raw_cert.get_extension_count()):
+        extension = raw_cert.get_extension(i)
+        try:
+            value = str(extension)
+        except crypto.Error:
+            value = extension.get_data().hex(':')
+        extensions[extension.get_short_name().decode('utf-8')] = value
+
+    san = re.findall(r'DNS:(.+?)(?:, |$)', extensions.get('subjectAltName', ''))
+
+    all_key_usage_str = extensions.get('keyUsage', '') + ', ' + extensions.get('extendedKeyUsage', '')
+    all_key_usage = [ku for ku in all_key_usage_str.split(', ') if ku]
+    not_after = _x509_time_to_datetime(raw_cert.get_notAfter())
+    days_until_expiration = (not_after - current_date).days
+
+    return Certificate(
+        pem=crypto.dump_certificate(crypto.FILETYPE_PEM, raw_cert).decode('utf-8'),
+        serial_number=str(raw_cert.get_serial_number()),
+        subject=_x509_name_to_dict(raw_cert.get_subject()),
+        issuer=_x509_name_to_dict(raw_cert.get_issuer()),
+        subject_alternative_names=san,
+        not_before=_x509_time_to_datetime(raw_cert.get_notBefore()),
+        not_after=not_after,
+        signature_algorithm=raw_cert.get_signature_algorithm().decode('utf-8'),
+        extensions=extensions,
+        key_length_in_bits=raw_cert.get_pubkey().bits(),
+        key_type=_public_key_type_by_openssl_id.get(raw_cert.get_pubkey().type(), 'UNKNOWN'),
+        fingerprint_sha256=raw_cert.digest('sha256').decode('utf-8'),
+        all_key_usage=all_key_usage,
+        is_expired=raw_cert.has_expired(),
+        days_until_expiration=days_until_expiration,
+    )
+
+def parse_der_certificate(certificate_der: bytes, current_date: datetime) -> Certificate:
+    return _raw_openssl_cert_to_certificate(crypto.load_certificate(crypto.FILETYPE_ASN1, certificate_der), current_date)
+
 def get_openssl_response(connection_settings: ConnectionSettings, client_hello: ClientHello) -> OpenSSLResponse:
     """
     Uses pyOpenSSL for a TLS handshake. Is not as accepting as the pure-Python implementation, but is capable
     of reading encrypted packets like the certificate chain.
     """
-    from OpenSSL import SSL, crypto
-    import select
-
-    def _x509_name_to_dict(x509_name: crypto.X509Name) -> dict[str, str]:
-        return {name.decode('utf-8'): value.decode('utf-8') for name, value in x509_name.get_components()}
-
-    def _x509_time_to_datetime(x509_time: Optional[bytes]) -> datetime:
-        if x509_time is None:
-            raise BadServerResponse('Timestamp cannot be None')
-        return datetime.strptime(x509_time.decode('ascii'), '%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc)
-
-    def raw_openssl_cert_to_certificate(raw_cert, current_date: datetime) -> Certificate:
-        """
-        Converts a "raw" pyOpenSSL certificate into our Certificate dataclass.
-        """
-        _public_key_type_by_openssl_id = {crypto.TYPE_DH: 'DH', crypto.TYPE_DSA: 'DSA', crypto.TYPE_EC: 'EC', crypto.TYPE_RSA: 'RSA'}
-
-        extensions: dict[str, str] = {}
-        for i in range(raw_cert.get_extension_count()):
-            extension = raw_cert.get_extension(i)
-            try:
-                value = str(extension)
-            except crypto.Error:
-                value = extension.get_data().hex(':')
-            extensions[extension.get_short_name().decode('utf-8')] = value
-
-        san = re.findall(r'DNS:(.+?)(?:, |$)', extensions.get('subjectAltName', ''))
-
-        all_key_usage_str = extensions.get('keyUsage', '') + ', ' + extensions.get('extendedKeyUsage', '')
-        all_key_usage = [ku for ku in all_key_usage_str.split(', ') if ku]
-        not_after = _x509_time_to_datetime(raw_cert.get_notAfter())
-        days_until_expiration = (not_after - current_date).days
-
-        return Certificate(
-            pem=crypto.dump_certificate(crypto.FILETYPE_PEM, raw_cert).decode('utf-8'),
-            serial_number=str(raw_cert.get_serial_number()),
-            subject=_x509_name_to_dict(raw_cert.get_subject()),
-            issuer=_x509_name_to_dict(raw_cert.get_issuer()),
-            subject_alternative_names=san,
-            not_before=_x509_time_to_datetime(raw_cert.get_notBefore()),
-            not_after=not_after,
-            signature_algorithm=raw_cert.get_signature_algorithm().decode('utf-8'),
-            extensions=extensions,
-            key_length_in_bits=raw_cert.get_pubkey().bits(),
-            key_type=_public_key_type_by_openssl_id.get(raw_cert.get_pubkey().type(), 'UNKNOWN'),
-            fingerprint_sha256=raw_cert.digest('sha256').decode('utf-8'),
-            all_key_usage=all_key_usage,
-            is_expired=raw_cert.has_expired(),
-            days_until_expiration=days_until_expiration,
-        )
-    
     no_flag_by_protocol = {
         Protocol.SSLv3: SSL.OP_NO_SSLv3,
         Protocol.TLS1_0: SSL.OP_NO_TLSv1,
@@ -301,7 +305,7 @@ def get_openssl_response(connection_settings: ConnectionSettings, client_hello: 
     logger.info(f"Received {len(raw_certs)} certificates and {len(raw_client_ca_names)} client CA's")
 
     return OpenSSLResponse(
-        server_certificate_chain=[raw_openssl_cert_to_certificate(raw_cert, connection_settings.date) for raw_cert in raw_certs],
+        server_certificate_chain=[_raw_openssl_cert_to_certificate(raw_cert, connection_settings.date) for raw_cert in raw_certs],
         client_ca_names=[_x509_name_to_dict(raw_client_ca_name) for raw_client_ca_name in raw_client_ca_names],
         # TODO: can we include ALPN protocol in response? I haven't found a public server to test it yet.
         #alpn_proto_negotiated=connection.get_alpn_proto_negotiated(),
@@ -411,19 +415,31 @@ def scan_server(
                 result.accepts_bad_sni = bool(try_send_hello(connection_settings, dataclasses.replace(client_hello, server_name='bad-sni.example.com')))
             tasks.append(task)
 
-        if fetch_cert_chain:
-            def do_openssl_handshake():
-                openssl_response = get_openssl_response(connection_settings, client_hello)
-                result.client_ca_names = openssl_response.client_ca_names
-                result.certificate_chain = openssl_response.server_certificate_chain
-            tasks.append(do_openssl_handshake)
-
         if max_workers > len(tasks):
             logger.warning(f'Max workers is {max_workers}, but only {len(tasks)} tasks were ever created')
 
         # Process tasks out of order, wait for all of them to finish, and stop on first exception.
         for i, _ in enumerate(pool.imap_unordered(lambda t: t(), tasks)):
             progress(i+1, len(tasks))
+
+    def _get_certificates_from_server_hellos(protocol_results: Iterable[ProtocolResult]) -> OpenSSLResponse:
+        # Try to get certificate information from previous responses.
+        # This should be available for <= TLS 1.2, since TLS 1.3 encrypts the certificates.
+        for protocol_result in protocol_results:
+            for hello in protocol_result._cipher_suite_hellos:
+                if hello.certificates_der:
+                    certificates = [parse_der_certificate(cert, connection_settings.date) for cert in hello.certificates_der]
+                    return OpenSSLResponse(certificates, None)
+                
+        # If not available, get certificates by doing a handshake with OpenSSL.
+        # This is less preferrable because OpenSSL is less accepting.
+        logger.info(f'No certificates from previous ServerHellos, doing one handshake with OpenSSLMax to get certificate information')
+        return get_openssl_response(connection_settings, client_hello)
+
+    if fetch_cert_chain:
+        certificates_result = _get_certificates_from_server_hellos(tmp_protocol_results.values())
+        result.client_ca_names = certificates_result.client_ca_names
+        result.certificate_chain = certificates_result.server_certificate_chain
 
     # Finish processing the Server Hellos to detect compression and cipher suite order.
     for protocol, protocol_result in tmp_protocol_results.items():
