@@ -28,6 +28,7 @@ class ServerHello:
     compression: CompressionMethod
     cipher_suite: CipherSuite
     group: Optional[Group]
+    certificate_der: list[bytes]
 
 def _bytes_to_int(b: bytes) -> int:
     return int.from_bytes(b, byteorder='big')
@@ -107,8 +108,25 @@ def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
             except ValueError:
                 logger.warning(f'Unknown group: {extension_data[:2]!r}')
                 pass
+
+    # TODO: handle content being split across multiple records
+
+    certificates_der = []
+    # TLS 1.2 and below send unencrypted certificates after Server Hello.
+    if version <= Protocol.TLS1_2:
+        record_type = RecordType(read_next(1))
+        if record_type == RecordType.HANDSHAKE:
+            legacy_record_version = read_next(2)
+            record_length = _bytes_to_int(read_next(2))
+            handshake_type = HandshakeType(read_next(1))
+            if handshake_type == HandshakeType.certificate:
+                handshake_length = read_next(3)
+                certificates_end = start + _bytes_to_int(read_next(3))
+                while start < certificates_end:
+                    certificate_length = _bytes_to_int(read_next(3))
+                    certificates_der.append(read_next(certificate_length))
     
-    return ServerHello(version, is_retry_request, compression_method, cipher_suite, group)
+    return ServerHello(version, is_retry_request, compression_method, cipher_suite, group, certificates_der)
 
 @dataclass
 class ClientHello:
