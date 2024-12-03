@@ -1,18 +1,17 @@
 from enum import Enum
 from multiprocessing.pool import ThreadPool
-import itertools
 import socket
 import re
-from typing import Iterable, Union, List, Optional, Iterator, Callable, Any
 from urllib.parse import urlparse
+from typing import Iterable, Union, Optional, Iterator, Callable, Any
 
 from OpenSSL import SSL, crypto
 import select
 
 import dataclasses
 from datetime import datetime, timezone
-from .protocol import ClientHello, ScanError, make_client_hello, parse_server_hello, ServerAlertError, BadServerResponse, ServerHello, logger
-from .names_and_numbers import AlertDescription, CipherSuite, Group, Protocol, CompressionMethod
+from .protocol import ClientHello, ScanError, make_client_hello, parse_server_hello, ServerAlertError, BadServerResponse, ServerHello, _parse_x509_name, logger
+from .names_and_numbers import CipherSuite, Group, Protocol, CompressionMethod, AttributeType
 
 # Default number of workers/threads/concurrent connections to use.
 DEFAULT_MAX_WORKERS: int = 6
@@ -160,7 +159,7 @@ def _iterate_server_option(connection_settings: ConnectionSettings, client_hello
         options_to_test.remove(accepted_option)
         yield accepted_option
 
-def enumerate_server_cipher_suites(connection_settings: ConnectionSettings, client_hello: ClientHello, on_response: Callable[[ServerHello], None] = lambda s: None) -> List[CipherSuite]:
+def enumerate_server_cipher_suites(connection_settings: ConnectionSettings, client_hello: ClientHello, on_response: Callable[[ServerHello], None] = lambda s: None) -> list[CipherSuite]:
     """
     Given a list of cipher suites to test, sends a sequence of Client Hello packets to the server,
     removing the accepted cipher suite from the list each time.
@@ -168,7 +167,7 @@ def enumerate_server_cipher_suites(connection_settings: ConnectionSettings, clie
     """
     return list(_iterate_server_option(connection_settings, client_hello, 'cipher_suites', 'cipher_suite', on_response))
 
-def enumerate_server_groups(connection_settings: ConnectionSettings, client_hello: ClientHello, on_response: Callable[[ServerHello], None] = lambda s: None) -> Optional[List[Group]]:
+def enumerate_server_groups(connection_settings: ConnectionSettings, client_hello: ClientHello, on_response: Callable[[ServerHello], None] = lambda s: None) -> Optional[list[Group]]:
     """
     Given a list of groups to test, sends a sequence of Client Hello packets to the server,
     removing the accepted group from the list each time.
@@ -183,8 +182,8 @@ class Certificate:
     """
     serial_number: str
     fingerprint_sha256: str
-    subject: dict[str, str]
-    issuer: dict[str, str]
+    subject: list[tuple[AttributeType, str]]
+    issuer: list[tuple[AttributeType, str]]
     subject_alternative_names: list[str]
     key_type: str
     key_length_in_bits: int
@@ -205,10 +204,10 @@ class OpenSSLResponse:
     # Certificate chain offered by the server.
     server_certificate_chain: list[Certificate]
     # List of CA's accepted for client certificates, as dictionary of X509 names.
-    client_ca_names: list[dict]
+    client_ca_names: list[list[tuple[AttributeType, str]]]
 
-def _x509_name_to_dict(x509_name: crypto.X509Name) -> dict[str, str]:
-    return {name.decode('utf-8'): value.decode('utf-8') for name, value in x509_name.get_components()}
+def _x509_name_to_list(x509_name: crypto.X509Name) -> list[tuple[AttributeType, str]]:
+    return list(_parse_x509_name(x509_name.der()))
 
 def _x509_time_to_datetime(x509_time: Optional[bytes]) -> datetime:
     if x509_time is None:
@@ -240,8 +239,8 @@ def _raw_openssl_cert_to_certificate(raw_cert, current_date: datetime) -> Certif
     return Certificate(
         pem=crypto.dump_certificate(crypto.FILETYPE_PEM, raw_cert).decode('utf-8'),
         serial_number=str(raw_cert.get_serial_number()),
-        subject=_x509_name_to_dict(raw_cert.get_subject()),
-        issuer=_x509_name_to_dict(raw_cert.get_issuer()),
+        subject=_x509_name_to_list(raw_cert.get_subject()),
+        issuer=_x509_name_to_list(raw_cert.get_issuer()),
         subject_alternative_names=san,
         not_before=_x509_time_to_datetime(raw_cert.get_notBefore()),
         not_after=not_after,
@@ -306,7 +305,7 @@ def get_openssl_response(connection_settings: ConnectionSettings, client_hello: 
 
     return OpenSSLResponse(
         server_certificate_chain=[_raw_openssl_cert_to_certificate(raw_cert, connection_settings.date) for raw_cert in raw_certs],
-        client_ca_names=[_x509_name_to_dict(raw_client_ca_name) for raw_client_ca_name in raw_client_ca_names],
+        client_ca_names=[_x509_name_to_list(raw_client_ca_name) for raw_client_ca_name in raw_client_ca_names],
         # TODO: can we include ALPN protocol in response? I haven't found a public server to test it yet.
         #alpn_proto_negotiated=connection.get_alpn_proto_negotiated(),
     )    
@@ -322,14 +321,14 @@ class ProtocolResult:
     has_compression: bool
     has_cipher_suite_order: Optional[bool]
     has_post_quantum: Optional[bool]
-    groups: Optional[List[Group]]
-    cipher_suites: Optional[List[CipherSuite]]
+    groups: Optional[list[Group]]
+    cipher_suites: Optional[list[CipherSuite]]
 
     def __post_init__(self) -> None:
         # Internal fields to store every ServerHello seen during cipher suite and group enumeration.
         # Used by the scan to detect compression and cipher suite order without additional handshakes.
-        self._cipher_suite_hellos: List[ServerHello] = []
-        self._group_hellos: List[ServerHello] = []
+        self._cipher_suite_hellos: list[ServerHello] = []
+        self._group_hellos: list[ServerHello] = []
 
 @dataclasses.dataclass
 class ServerScanResult:
@@ -337,7 +336,7 @@ class ServerScanResult:
     protocols: dict[Protocol, Optional[ProtocolResult]]
     requires_sni: Optional[bool]
     accepts_bad_sni: Optional[bool]
-    client_ca_names: list[dict]
+    client_ca_names: list[list[tuple[AttributeType, str]]]
     certificate_chain: list[Certificate]
 
 def scan_server(
@@ -379,7 +378,7 @@ def scan_server(
     with ThreadPool(max_workers) as pool:
         logger.debug("Initializing workers")
 
-        tasks: List[Callable[[], None]] = []
+        tasks: list[Callable[[], None]] = []
 
         def scan_protocol(protocol):
             protocol_result = tmp_protocol_results[protocol]
@@ -429,7 +428,7 @@ def scan_server(
             for hello in protocol_result._cipher_suite_hellos:
                 if hello.certificates_der:
                     certificates = [parse_der_certificate(cert, connection_settings.date) for cert in hello.certificates_der]
-                    return OpenSSLResponse(certificates, None)
+                    return OpenSSLResponse(certificates, hello.client_cas)
                 
         # If not available, get certificates by doing a handshake with OpenSSL.
         # This is less preferrable because OpenSSL is less accepting.

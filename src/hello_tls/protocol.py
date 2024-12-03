@@ -1,4 +1,4 @@
-from typing import Iterator, List, Sequence, Optional, Iterable, Callable, Tuple
+from typing import Iterator, Sequence, Optional, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 import logging
@@ -29,12 +29,12 @@ class ServerHello:
     cipher_suite: CipherSuite
     group: Optional[Group]
     certificates_der: list[bytes]
-    client_cas: list[Tuple[str, str]]
+    client_cas: list[list[tuple[AttributeType, str]]]
 
 def _bytes_to_int(b: bytes) -> int:
     return int.from_bytes(b, byteorder='big')
 
-def _parse_x509_name(der: bytes) -> Iterable[Tuple[AttributeType, str]]:
+def _parse_x509_name(der: bytes) -> Iterable[tuple[AttributeType, str]]:
     def parse_oid(data: bytes) -> str:
         first = data[0] // 40
         second = data[0] % 40
@@ -47,7 +47,7 @@ def _parse_x509_name(der: bytes) -> Iterable[Tuple[AttributeType, str]]:
                 value = 0
         return oid
 
-    def parse_length(data: bytes, idx: int) -> Tuple[int, int]:
+    def parse_length(data: bytes, idx: int) -> tuple[int, int]:
         length = data[idx]
         if length & 0x80:
             length_len = length & 0x7F
@@ -214,7 +214,7 @@ def make_client_hello(client_hello: ClientHello) -> bytes:
     Creates a TLS Record byte string with Client Hello handshake based on client preferences.
     """
     # Because Python's `bytes` are immutable, we must use a list of octets instead.
-    octets: List[int] = []
+    octets: list[int] = []
 
     # TLS really likes its length-prefixed data structures. I strongly prefer writing
     # the bytes in the order they'll be sent, so I use this helper context manager to
