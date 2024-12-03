@@ -699,3 +699,32 @@ class ExtensionType(Enum):
     ticket_request = b'\x00\x3a'
     dnssec_chain = b'\x00\x3b'
     sequence_number_encryption_algorithms = b'\x00\x3c'
+
+# Used for distinguished names in mTLS client CA lists.
+class AttributeType(Enum):
+    def __repr__(self):
+        return self.name
+    def __new__(cls, value, *rest, **kwds):
+        obj = object.__new__(cls)
+        obj._value_ = value
+        return obj
+    # Annotate each attribute type with its short name, if any.
+    def __init__(self, oid: str, short: str):
+        self.short = short
+
+    COUNTRY_NAME = ("2.5.4.6", "C")
+    ORGANIZATION_NAME = ("2.5.4.10", "O")
+    ORGANIZATIONAL_UNIT_NAME = ("2.5.4.11", "OU")
+    COMMON_NAME = ("2.5.4.3", "CN")
+    LOCALITY_NAME = ("2.5.4.7", "L")
+    STATE_OR_PROVINCE_NAME = ("2.5.4.8", "S")
+    TITLE = ("2.5.4.12", "T")
+    GIVEN_NAME = ("2.5.4.42", "G")
+    INITIALS = ("2.5.4.43", "I")
+    SUR_NAME = ("2.5.4.4", "S")
+    DOMAIN_COMPONENT = ("0.9.2342.19200300.100.1.25", "DC")
+    RSA_emailAddr = ("1.2.840.113549.1.9.1", "E")
+    STREET_ADDRESS = ("2.5.4.9", "Street")
+    RSA_unstructName = ("1.2.840.113549.1.9.2", "UnstructuredName")
+    RSA_unstructAddr = ("1.2.840.113549.1.9.8", "UnstructuredAddress")
+    DEVICE_SERIAL_NUMBER = ("2.5.4.5", "DeviceSerialNumber")

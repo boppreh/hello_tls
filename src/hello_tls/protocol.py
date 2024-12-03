@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import logging
 
-from .names_and_numbers import Protocol, RecordType, HandshakeType, CompressionMethod, CipherSuite, ExtensionType, Group, AlertLevel, AlertDescription, PskKeyExchangeMode
+from .names_and_numbers import Protocol, RecordType, HandshakeType, CompressionMethod, CipherSuite, ExtensionType, Group, AlertLevel, AlertDescription, PskKeyExchangeMode, AttributeType
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +29,60 @@ class ServerHello:
     cipher_suite: CipherSuite
     group: Optional[Group]
     certificates_der: list[bytes]
+    client_cas: list[Tuple[str, str]]
 
 def _bytes_to_int(b: bytes) -> int:
     return int.from_bytes(b, byteorder='big')
+
+def _parse_x509_name(der: bytes) -> Iterable[Tuple[AttributeType, str]]:
+    def parse_oid(data: bytes) -> str:
+        first = data[0] // 40
+        second = data[0] % 40
+        oid = f"{first}.{second}"
+        value = 0
+        for byte in data[1:]:
+            value = (value << 7) | (byte & 0x7F)
+            if not (byte & 0x80):
+                oid += f".{value}"
+                value = 0
+        return oid
+
+    def parse_length(data: bytes, idx: int) -> Tuple[int, int]:
+        length = data[idx]
+        if length & 0x80:
+            length_len = length & 0x7F
+            length = int.from_bytes(data[idx + 1:idx + 1 + length_len], 'big')
+            idx += length_len
+        return length, idx + 1
+
+    idx = 0
+    if der[idx] != 0x30:  # SEQUENCE
+        raise ValueError("Invalid X.509 Name DER encoding")
+    length, idx = parse_length(der, idx + 1)
+    end_idx = idx + length
+
+    while idx < end_idx:
+        if der[idx] != 0x31:  # SET
+            raise ValueError("Invalid X.509 Name DER encoding")
+        set_len, idx = parse_length(der, idx + 1)
+
+        if der[idx] != 0x30:  # SEQUENCE
+            raise ValueError("Invalid X.509 Name DER encoding")
+        seq_len, idx = parse_length(der, idx + 1)
+
+        if der[idx] != 0x06:  # OBJECT IDENTIFIER
+            raise ValueError("Invalid X.509 Name DER encoding")
+        oid_len, idx = parse_length(der, idx + 1)
+        oid = parse_oid(der[idx:idx + oid_len])
+        idx += oid_len
+
+        if der[idx] != 0x13 and der[idx] != 0x0C:  # PrintableString or UTF8String
+            raise ValueError("Invalid X.509 Name DER encoding")
+        value_len, idx = parse_length(der, idx + 1)
+        value = der[idx:idx + value_len].decode('utf-8')
+        idx += value_len
+
+        yield AttributeType(oid), value
 
 def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
     """
@@ -53,12 +104,18 @@ def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
         start += length
         return value
     
+    def read_next_int(length: int) -> int:
+        return _bytes_to_int(read_next(length))
+    def read_next_length_prefixed(length_prefix_size: int) -> bytes:
+        length = read_next_int(length_prefix_size)
+        return read_next(length)
+    
     if data.startswith(b'HTTP/'):
         raise BadServerResponse('Server responded with plaintext HTTP, not TLS', data)
 
     record_type = RecordType(read_next(1))
     legacy_record_version = read_next(2)
-    record_length = _bytes_to_int(read_next(2))
+    record_length = read_next_int(2)
     record_end = start + record_length
     if record_type == RecordType.ALERT:
         # Server responded with an error.
@@ -71,7 +128,7 @@ def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
     
     handshake_type = HandshakeType(read_next(1))
     assert handshake_type == HandshakeType.server_hello, handshake_type
-    server_hello_length = _bytes_to_int(read_next(3))
+    server_hello_length = read_next_int(3)
     # At most TLS 1.2. Handshakes for TLS 1.3 use the supported_versions extension.
     version = Protocol(read_next(2))
     server_random = read_next(32)
@@ -80,12 +137,11 @@ def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
     # It's an error, but represented in server_random to maintain backwards compatibility.
     is_retry_request = server_random == b'\xCF\x21\xAD\x74\xE5\x9A\x61\x11\xBE\x1D\x8C\x02\x1E\x65\xB8\x91\xC2\xA2\x11\x16\x7A\xBB\x8C\x5E\x07\x9E\x09\xE2\xC8\xA8\x33\x9C'
 
-    session_id_length = read_next(1)
-    session_id = read_next(_bytes_to_int(session_id_length))
+    session_id = read_next_length_prefixed(1)
     cipher_suite = CipherSuite(read_next(2))
     compression_method = CompressionMethod(read_next(1))
     if start + 2 <= record_end:
-        extensions_length = _bytes_to_int(read_next(2))
+        extensions_length = read_next_int(2)
     else: # extensions may not be present in TLS 1.2 and lower
         extensions_length = 0
     extensions_end = start + extensions_length
@@ -98,8 +154,7 @@ def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
         except ValueError:
             # Ignore unknown extensions.
             continue
-        extension_data_length = read_next(2)
-        extension_data = read_next(_bytes_to_int(extension_data_length))
+        extension_data = read_next_length_prefixed(2)
         if extension_type == ExtensionType.supported_versions:
             version = Protocol(extension_data)
         elif extension_type == ExtensionType.key_share:
@@ -112,21 +167,39 @@ def parse_server_hello(packets: Iterable[bytes]) -> ServerHello:
     # TODO: handle content being split across multiple records
 
     certificates_der = []
+    client_cas = []
     # TLS 1.2 and below send unencrypted certificates after Server Hello.
     if version <= Protocol.TLS1_2:
-        record_type = RecordType(read_next(1))
-        if record_type == RecordType.HANDSHAKE:
+        # We'll keep parsing records and handshakes until the server says it's done.
+        server_hello_done = False
+        while not server_hello_done and RecordType(read_next(1)) == RecordType.HANDSHAKE:
             legacy_record_version = read_next(2)
-            record_length = _bytes_to_int(read_next(2))
-            handshake_type = HandshakeType(read_next(1))
-            if handshake_type == HandshakeType.certificate:
-                handshake_length = read_next(3)
-                certificates_end = start + _bytes_to_int(read_next(3))
-                while start < certificates_end:
-                    certificate_length = _bytes_to_int(read_next(3))
-                    certificates_der.append(read_next(certificate_length))
+            record_length = read_next_int(2)
+            record_end = start + record_length
+            # The record may contain multiple handshakes.
+            while not server_hello_done and start < record_end:
+                handshake_type = HandshakeType(read_next(1))
+                handshake_length = read_next_int(3)
+                if handshake_type == HandshakeType.certificate:
+                    # It's a server certificate chain.
+                    certificates_end = start + read_next_int(3)
+                    while start < certificates_end:
+                        certificates_der.append(read_next_length_prefixed(3))
+                elif handshake_type == HandshakeType.certificate_request:
+                    # It's a request for client certificate (for mTLS), given as a list of accepted client CA subject names.
+                    certificate_types = read_next_length_prefixed(1)
+                    signature_hash_algorithms = read_next_length_prefixed(2)
+                    distinguished_names_length = read_next_int(2)
+                    distinguished_names_end = start + distinguished_names_length
+                    while start < distinguished_names_end:
+                        client_cas.append(list(_parse_x509_name(read_next_length_prefixed(2))))
+                elif handshake_type == HandshakeType.server_hello_done:
+                    server_hello_done = True
+                else:
+                    # Got a different type of handshake, skip.
+                    read_next(handshake_length)
     
-    return ServerHello(version, is_retry_request, compression_method, cipher_suite, group, certificates_der)
+    return ServerHello(version, is_retry_request, compression_method, cipher_suite, group, certificates_der, client_cas)
 
 @dataclass
 class ClientHello:
